@@ -1,287 +1,431 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import PageShell from '@/components/PageShell';
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
-import { Line } from 'react-chartjs-2';
+import { ToastProvider, useToast } from '@/components/Toast';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { Flag, Filter, Upload, Play, Download, AlertTriangle, CheckCircle2, XCircle, BarChart2, Maximize, Map as MapIcon, Image as ImageIcon, Crosshair, ChevronRight, ChevronLeft } from 'lucide-react';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
+// --- Types ---
+interface BBox { x: number; y: number; w: number; h: number; type: string; }
+interface Frame { id: string; flightId: string; url: string; prevUrl: string; status: 'CRITICAL'|'DEFECT'|'CLEAN'; type: string; conf: number; lat: number; lon: number; ts: number; bboxes: BBox[]; metadata: { zone: string; }; flagged: boolean; ssim: number; }
+interface Flight { id: string; name: string; date: string; framesCount: number; status: string; }
 
-export default function AnalysisCenter() {
-  const [flights, setFlights] = useState([
-    { id: 'f1', name: 'Flight 001', date: '2026-05-14', frames: 24, status: 'Analyzed' },
-    { id: 'f2', name: 'Flight 002', date: '2026-05-13', frames: 18, status: 'Analyzed' },
-    { id: 'f3', name: 'Flight 003', date: '2026-05-10', frames: 24, status: 'Analyzed' },
-  ]);
-  const [selectedFlightId, setSelectedFlightId] = useState('f1');
-  
-  // Comparison state
-  const [isCompareMode, setIsCompareMode] = useState(false);
-  const [compareFlightId, setCompareFlightId] = useState('f2');
-  
-  const [filter, setFilter] = useState('All');
-  const fileInputRef = useRef<HTMLInputElement>(null);
+// --- Helpers ---
+const statusColor = (s: string) => s==='CRITICAL'?'var(--accent-red)':s==='DEFECT'?'var(--accent-amber)':'var(--accent-green)';
+const statusBg = (s: string) => s==='CRITICAL'?'var(--accent-red-glow)':s==='DEFECT'?'var(--accent-amber-glow)':'var(--accent-green-glow)';
 
-  const selectedFlight = flights.find(f => f.id === selectedFlightId);
+// --- Subcomponents ---
+function InteractivePathMap({ frames, selectedId, onSelect }: { frames: Frame[], selectedId: string | null, onSelect: (id: string) => void }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const [frames, setFrames] = useState([
-    { id: 'frame1', url: 'https://images.unsplash.com/photo-1590492825656-9a54523fa5d9?auto=format&fit=crop&q=80', prevUrl: 'https://images.unsplash.com/photo-1590492825656-9a54523fa5d9?auto=format&fit=crop&q=60', status: 'CRITICAL', type: 'crack', conf: 92, lat: 34.0522, lon: -118.2437, ts: 1684065600, bboxes: [{ x: 20, y: 30, w: 10, h: 40, type: 'crack' }], metadata: { zone: 'NW facade' }, flagged: false, ssim: 0.81 },
-    { id: 'frame2', url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&q=80', prevUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&q=60', status: 'CLEAN', type: 'none', conf: 98, lat: 34.0523, lon: -118.2436, ts: 1684065605, bboxes: [], metadata: { zone: 'NW facade' }, flagged: false, ssim: 0.96 },
-    { id: 'frame3', url: 'https://images.unsplash.com/photo-1581092160562-40aa08e78837?auto=format&fit=crop&q=80', prevUrl: 'https://images.unsplash.com/photo-1581092160562-40aa08e78837?auto=format&fit=crop&q=60', status: 'DEFECT', type: 'spalling', conf: 85, lat: 34.0524, lon: -118.2435, ts: 1684065610, bboxes: [{ x: 50, y: 50, w: 15, h: 15, type: 'spalling' }], metadata: { zone: 'SE pylon' }, flagged: true, ssim: 0.89 },
-  ]);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx || frames.length === 0) return;
 
-  const handleDemoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const newFlightId = `flight_demo_${Date.now()}`;
-      const newFrames = Array.from(e.target.files).map((file, i) => ({
-        id: `demo_frame_${i}`,
-        url: URL.createObjectURL(file),
-        prevUrl: URL.createObjectURL(file),
-        status: 'DEFECT',
-        type: 'spalling',
-        conf: 85,
-        lat: 34.0,
-        lon: -118.0,
-        ts: Date.now(),
-        bboxes: [{ x: 40, y: 40, w: 20, h: 20, type: 'spalling' }],
-        metadata: { zone: 'Demo Area' },
-        flagged: false,
-        ssim: 0.99
-      }));
-      setFlights([...flights, { id: newFlightId, name: `Demo Flight`, date: new Date().toISOString().split('T')[0], frames: newFrames.length, status: 'Analyzed' }]);
-      setSelectedFlightId(newFlightId);
-      setFrames(newFrames);
-    }
-  };
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
 
-  const filteredFrames = frames.filter(f => {
-    if (filter === 'All') return true;
-    if (filter === 'Critical') return f.status === 'CRITICAL';
-    if (filter === 'Flagged') return f.flagged;
-    if (filter === 'Clean') return f.status === 'CLEAN';
-    return true;
-  });
+    // Calculate bounds
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    frames.forEach(f => {
+      if(f.lat < minLat) minLat = f.lat; if(f.lat > maxLat) maxLat = f.lat;
+      if(f.lon < minLon) minLon = f.lon; if(f.lon > maxLon) maxLon = f.lon;
+    });
 
-  const handleFlagFrame = async (frameId: string) => {
-    // Optimistic UI update
-    setFrames(frames.map(f => f.id === frameId ? { ...f, flagged: true } : f));
-    
-    // API call
-    try {
-      await fetch('/api/analyze/flag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ flightId: selectedFlightId, frameId, flagged: true })
-      });
-    } catch(err) {
-      console.error('Failed to flag');
-    }
-  };
+    // Add padding
+    const latRange = Math.max(maxLat - minLat, 0.0001);
+    const lonRange = Math.max(maxLon - minLon, 0.0001);
+    minLat -= latRange * 0.1; maxLat += latRange * 0.1;
+    minLon -= lonRange * 0.1; maxLon += lonRange * 0.1;
 
-  // Stats
-  const totalFrames = frames.length;
-  const criticalCount = frames.filter(f => f.status === 'CRITICAL').length;
-  const defectCount = frames.filter(f => f.status === 'DEFECT').length;
-  const cleanCount = frames.filter(f => f.status === 'CLEAN').length;
-  const cleanPercent = Math.round((cleanCount / totalFrames) * 100) || 0;
-  
-  // Most affected zone logic
-  const zoneCounts: Record<string, number> = {};
-  frames.filter(f => f.status !== 'CLEAN').forEach(f => {
-    zoneCounts[f.metadata.zone] = (zoneCounts[f.metadata.zone] || 0) + 1;
-  });
-  const mostAffectedZone = Object.keys(zoneCounts).length > 0 
-    ? Object.keys(zoneCounts).reduce((a, b) => zoneCounts[a] > zoneCounts[b] ? a : b)
-    : 'N/A';
+    const getPt = (lat: number, lon: number) => ({
+      x: ((lon - minLon) / (maxLon - minLon)) * w,
+      y: h - ((lat - minLat) / (maxLat - minLat)) * h
+    });
 
-  // Chart Data
-  const chartData = {
-    labels: ['2026-05-10', '2026-05-13', '2026-05-14'],
-    datasets: [
-      {
-        label: 'NW Facade Defects',
-        data: [1, 2, 3],
-        borderColor: '#ef4444',
-        backgroundColor: '#ef4444',
-      },
-      {
-        label: 'SE Pylon Defects',
-        data: [0, 1, 1],
-        borderColor: '#f97316',
-        backgroundColor: '#f97316',
+    // Draw Grid
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    for(let i=0; i<w; i+=40) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,h); ctx.stroke(); }
+    for(let i=0; i<h; i+=40) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(w,i); ctx.stroke(); }
+
+    // Draw Path
+    ctx.beginPath();
+    frames.forEach((f, i) => {
+      const p = getPt(f.lat, f.lon);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Draw Points
+    frames.forEach(f => {
+      const p = getPt(f.lat, f.lon);
+      const isSelected = f.id === selectedId;
+      
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, isSelected ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = isSelected ? '#FFFFFF' : statusColor(f.status);
+      ctx.fill();
+      
+      if (isSelected || f.status !== 'CLEAN') {
+        ctx.strokeStyle = isSelected ? '#3B82F6' : '#111827';
+        ctx.lineWidth = 2;
+        ctx.stroke();
       }
-    ],
+      
+      if (isSelected) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    });
+  }, [frames, selectedId]);
+
+  const handleClick = (e: React.MouseEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas || frames.length === 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    frames.forEach(f => {
+      if(f.lat < minLat) minLat = f.lat; if(f.lat > maxLat) maxLat = f.lat;
+      if(f.lon < minLon) minLon = f.lon; if(f.lon > maxLon) maxLon = f.lon;
+    });
+    const latRange = Math.max(maxLat - minLat, 0.0001);
+    const lonRange = Math.max(maxLon - minLon, 0.0001);
+    minLat -= latRange * 0.1; maxLat += latRange * 0.1;
+    minLon -= lonRange * 0.1; maxLon += lonRange * 0.1;
+
+    let closestId = null;
+    let minDist = 20; // 20px hit radius
+
+    frames.forEach(f => {
+      const px = ((f.lon - minLon) / (maxLon - minLon)) * canvas.width;
+      const py = canvas.height - ((f.lat - minLat) / (maxLat - minLat)) * canvas.height;
+      const dist = Math.sqrt(Math.pow(px - cx, 2) + Math.pow(py - cy, 2));
+      if (dist < minDist) { minDist = dist; closestId = f.id; }
+    });
+
+    if (closestId) onSelect(closestId);
   };
 
   return (
-    <PageShell title="Flight Image Analysis" backHref="/">
-      <div style={{ display: 'flex', height: 'calc(100vh - 96px)', margin: '-1.5rem', backgroundColor: '#0f172a', color: 'white' }}>
-        
-        {/* Left Panel */}
-        <div style={{ width: '320px', backgroundColor: '#1e293b', borderRight: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '1rem', borderBottom: '1px solid #334155' }}>
-            <h3 style={{ margin: '0 0 1rem 0' }}>Select Flight</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '300px', overflowY: 'auto' }}>
-              {flights.map(f => (
-                <div key={f.id} onClick={() => setSelectedFlightId(f.id)} style={{ padding: '0.75rem', backgroundColor: selectedFlightId === f.id ? '#334155' : 'transparent', borderRadius: '0.5rem', cursor: 'pointer' }}>
-                  <div style={{ fontWeight: 'bold' }}>{f.name}</div>
-                  <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{f.date} — {f.frames} frames</div>
-                  <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', color: f.status === 'Analyzed' ? '#22c55e' : '#eab308' }}>{f.status}</div>
+    <div ref={containerRef} style={{ width:'100%', height:'100%', background:'#000', position:'relative', borderRadius:'var(--radius-lg)', overflow:'hidden', border:'1px solid var(--border-primary)' }}>
+      <div style={{ position:'absolute', top:10, left:10, zIndex:10, display:'flex', gap:6 }}>
+        <div className="glass badge"><MapIcon size={12}/> Inspection Path</div>
+      </div>
+      <canvas ref={canvasRef} width={800} height={400} onClick={handleClick} style={{ width:'100%', height:'100%', cursor:'crosshair' }} />
+    </div>
+  );
+}
+
+// --- Main Page ---
+function AnalysisContent() {
+  const { success, info, warning, error } = useToast();
+  
+  const [flights, setFlights] = useState<Flight[]>([]);
+  const [allFrames, setAllFrames] = useState<Frame[]>([]);
+  const [selectedFlightId, setSelectedFlightId] = useState<string>('');
+  
+  const [filter, setFilter] = useState('All');
+  const [viewMode, setViewMode] = useState<'grid'|'map'>('grid');
+  const [isCompare, setIsCompare] = useState(false);
+  const [compareId, setCompareId] = useState('');
+  const [activeFrameId, setActiveFrameId] = useState<string | null>(null);
+  
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/analysis/flights')
+      .then(res => res.json())
+      .then(data => {
+        setFlights(data.flights);
+        setAllFrames(data.frames);
+        if (data.flights.length > 0) {
+          setSelectedFlightId(data.flights[0].id);
+          if (data.flights.length > 1) setCompareId(data.flights[1].id);
+        }
+        setIsLoading(false);
+      })
+      .catch(() => {
+        error("Failed to load flight data.");
+        setIsLoading(false);
+      });
+  }, []);
+
+  const flightFrames = useMemo(() => allFrames.filter(f => f.flightId === selectedFlightId).sort((a,b)=>a.ts-b.ts), [allFrames, selectedFlightId]);
+  
+  const filtered = useMemo(() => {
+    return flightFrames.filter(f => {
+      if(filter==='All') return true;
+      if(filter==='Critical') return f.status==='CRITICAL';
+      if(filter==='Flagged') return f.flagged;
+      if(filter==='Clean') return f.status==='CLEAN';
+      return f.type.toLowerCase() === filter.toLowerCase(); // Check exact defect type
+    });
+  }, [flightFrames, filter]);
+
+  const sf = flights.find(f=>f.id===selectedFlightId);
+  const total = flightFrames.length;
+  const crit = flightFrames.filter(f=>f.status==='CRITICAL').length;
+  const def = flightFrames.filter(f=>f.status==='DEFECT').length;
+  const clean = flightFrames.filter(f=>f.status==='CLEAN').length;
+
+  const handleFlag = (id: string) => {
+    setAllFrames(allFrames.map(f=>f.id===id?{...f,flagged:true}:f));
+    warning('Frame flagged for urgent review');
+  };
+
+  if (isLoading) return <PageShell title="Analysis Center" noPadding><div style={{display:'flex',justifyContent:'center',alignItems:'center',height:'100vh',color:'var(--text-muted)'}}>Loading Inspection Data...</div></PageShell>;
+
+  return (
+    <PageShell title="Analysis Center" subtitle="Post-flight image analysis & defect detection"
+      actions={
+        <div style={{ display:'flex', gap:8 }}>
+          <button className="btn btn-secondary btn-sm"><Upload size={11}/> Import Logs</button>
+          <button className="btn btn-primary btn-sm" onClick={()=>success(`Analysis complete — ${crit+def} defects found`)}><Play size={11}/> Run AI Analysis</button>
+        </div>
+      }>
+      
+      <div style={{ display:'flex', gap:16, height:'calc(100vh - 130px)' }}>
+
+        {/* LEFT SIDEBAR */}
+        <div style={{ width:280, display:'flex', flexDirection:'column', gap:12, flexShrink:0, overflowY:'auto', paddingRight:4 }}>
+          
+          {/* Flights List */}
+          <div className="stride-card" style={{ overflow:'hidden' }}>
+            <div className="card-header">
+              <span className="card-header-title">Flights</span>
+              <span style={{ fontSize:11, color:'var(--text-muted)' }}>{flights.length} logs</span>
+            </div>
+            <div style={{ overflowY:'auto', maxHeight:240 }}>
+              {flights.map(f=>(
+                <div key={f.id} onClick={()=>{ setSelectedFlightId(f.id); setActiveFrameId(null); }} style={{ padding:'12px 14px', cursor:'pointer', borderBottom:'1px solid var(--border-primary)', background: selectedFlightId===f.id?'var(--accent-blue-glow)':'transparent', borderLeft: selectedFlightId===f.id?'3px solid var(--accent-blue)':'3px solid transparent', transition:'all 0.15s' }}>
+                  <div style={{ fontSize:13, fontWeight:600, color: selectedFlightId===f.id?'var(--accent-blue-bright)':'var(--text-primary)' }}>{f.name}</div>
+                  <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>{new Date(f.date).toLocaleDateString()} · {f.framesCount} frames</div>
+                  <div style={{ fontSize:10, fontWeight:600, color:'var(--accent-green)', marginTop:4, textTransform:'uppercase' }}>{f.status}</div>
                 </div>
               ))}
             </div>
-            <button onClick={() => fileInputRef.current?.click()} style={{ marginTop: '1rem', width: '100%', padding: '0.5rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.25rem', cursor: 'pointer' }}>
-              + Import Demo Flight
-            </button>
-            <input type="file" multiple accept="image/*" ref={fileInputRef} style={{ display: 'none' }} onChange={handleDemoUpload} />
           </div>
-          
-          <div style={{ padding: '1rem', borderBottom: '1px solid #334155' }}>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {['All', 'Critical', 'Flagged', 'Clean'].map(opt => (
-                <button key={opt} onClick={() => setFilter(opt)} style={{ padding: '0.25rem 0.5rem', backgroundColor: filter === opt ? '#3b82f6' : '#334155', border: 'none', color: 'white', borderRadius: '0.25rem', fontSize: '0.75rem', cursor: 'pointer' }}>
-                  {opt}
-                </button>
+
+          {/* Filters */}
+          <div className="stride-card" style={{ padding:14 }}>
+            <div style={{ fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.1em', color:'var(--text-muted)', marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
+              <Filter size={10}/> Filters
+            </div>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+              {['All','Critical','Flagged','Clean','Crack','Corrosion','Spalling'].map(opt=>(
+                <button key={opt} onClick={()=>setFilter(opt)} className={`btn btn-sm ${filter===opt?'btn-primary':'btn-secondary'}`} style={{ padding:'4px 10px', fontSize:11 }}>{opt}</button>
               ))}
             </div>
           </div>
-          
-          <div style={{ padding: '1rem', flex: 1, overflowY: 'auto' }}>
-            <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
-              {filteredFrames.map(f => (
-                <img key={f.id} src={f.url} alt="thumb" style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '0.25rem' }} />
-              ))}
-            </div>
+
+          {/* Stats Summary */}
+          <div className="stride-card" style={{ padding:14 }}>
+            <div style={{ fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.1em', color:'var(--text-muted)', marginBottom:12 }}>Summary</div>
+            {[
+              { label:'Total Frames', value:total, color:'var(--text-primary)', Icon:BarChart2 },
+              { label:'Critical', value:crit, color:'var(--accent-red)', Icon:XCircle },
+              { label:'Moderate', value:def, color:'var(--accent-amber)', Icon:AlertTriangle },
+              { label:'Clean', value:clean, color:'var(--accent-green)', Icon:CheckCircle2 },
+            ].map(({label,value,color,Icon})=>(
+              <div key={label} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid var(--border-primary)' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <Icon size={13} color={color}/>
+                  <span style={{ fontSize:12, color:'var(--text-secondary)' }}>{label}</span>
+                </div>
+                <span style={{ fontSize:14, fontWeight:700, color, fontFamily:'var(--font-mono)' }}>{value}</span>
+              </div>
+            ))}
           </div>
+
         </div>
 
-        {/* Main Area */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '1rem', borderBottom: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <h2 style={{ margin: 0 }}>{selectedFlight?.name}</h2>
-              <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>{selectedFlight?.date} — {filteredFrames.length} frames showing</div>
-            </div>
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
-                <input type="checkbox" checked={isCompareMode} onChange={(e) => setIsCompareMode(e.target.checked)} />
-                Compare with previous flight
-              </label>
-              {isCompareMode && (
-                <select 
-                  value={compareFlightId} 
-                  onChange={e => setCompareFlightId(e.target.value)}
-                  style={{ padding: '0.25rem 0.5rem', backgroundColor: '#1e293b', color: 'white', border: '1px solid #334155', borderRadius: '0.25rem' }}
-                >
-                  {flights.filter(f => f.id !== selectedFlightId).map(f => (
-                    <option key={f.id} value={f.id}>Compare against: {f.name}</option>
-                  ))}
-                </select>
-              )}
-              <button style={{ padding: '0.5rem 1rem', backgroundColor: '#22c55e', color: 'white', border: 'none', borderRadius: '0.25rem', cursor: 'pointer' }}>Run Analysis</button>
-              <button style={{ padding: '0.5rem 1rem', backgroundColor: '#334155', color: 'white', border: 'none', borderRadius: '0.25rem', cursor: 'pointer' }}>Export</button>
-            </div>
-          </div>
+        {/* MAIN AREA */}
+        <div style={{ flex:1, display:'flex', flexDirection:'column', gap:14, minWidth:0, overflow:'hidden' }}>
           
-          <div style={{ padding: '1.5rem 1.5rem 0 1.5rem', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
-            <div style={{ padding: '1rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', border: '1px solid #334155' }}>
-              <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase' }}>Total Frames Analyzed</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', marginTop: '0.25rem' }}>{totalFrames}</div>
-            </div>
-            <div style={{ padding: '1rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', border: '1px solid #334155' }}>
-              <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase' }}>Defects Found</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', marginTop: '0.25rem' }}>
-                {criticalCount + defectCount} <span style={{ fontSize: '0.875rem', fontWeight: 'normal', color: '#94a3b8' }}>({criticalCount} crit, {defectCount} med)</span>
+          {/* Top Controls */}
+          <div className="stride-card" style={{ padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0 }}>
+            <div>
+              <div style={{ fontSize:16, fontWeight:700, color:'var(--text-primary)' }}>{sf?.name ?? 'No Flight Selected'}</div>
+              <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:2 }}>
+                {filtered.length} frames matched filter: <span style={{color:'var(--text-primary)', fontWeight:600}}>{filter}</span>
               </div>
             </div>
-            <div style={{ padding: '1rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', border: '1px solid #334155' }}>
-              <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase' }}>Clean Frames</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', marginTop: '0.25rem', color: '#22c55e' }}>{cleanPercent}%</div>
-            </div>
-            <div style={{ padding: '1rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', border: '1px solid #334155' }}>
-              <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase' }}>Most Affected Zone</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', marginTop: '0.25rem', color: '#eab308' }}>{mostAffectedZone}</div>
+            
+            <div style={{ display:'flex', gap:16, alignItems:'center' }}>
+              {/* View Toggle */}
+              <div style={{ display:'flex', background:'var(--bg-secondary)', padding:4, borderRadius:'var(--radius-md)', border:'1px solid var(--border-primary)' }}>
+                <button onClick={()=>setViewMode('grid')} className={`btn btn-sm ${viewMode==='grid'?'btn-primary':'btn-ghost'}`} style={{ padding:'4px 10px', height:28 }}><ImageIcon size={14}/></button>
+                <button onClick={()=>setViewMode('map')} className={`btn btn-sm ${viewMode==='map'?'btn-primary':'btn-ghost'}`} style={{ padding:'4px 10px', height:28 }}><MapIcon size={14}/></button>
+              </div>
+              
+              {/* Compare Toggle */}
+              <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:13, color:'var(--text-secondary)' }}>
+                <input type="checkbox" checked={isCompare} onChange={e=>setIsCompare(e.target.checked)} />
+                Compare Mode
+              </label>
+              {isCompare && (
+                <select value={compareId} onChange={e=>setCompareId(e.target.value)} className="stride-select" style={{ width:'auto', padding:'4px 8px', height:32 }}>
+                  {flights.filter(f=>f.id!==selectedFlightId).map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+              )}
+              <button className="btn btn-secondary btn-sm" title="Fullscreen"><Maximize size={14}/></button>
             </div>
           </div>
 
-          <div style={{ padding: '1.5rem', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: isCompareMode ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: '1.5rem' }}>
-              {filteredFrames.map(f => (
-                <div key={f.id} style={{ backgroundColor: '#1e293b', borderRadius: '0.5rem', overflow: 'hidden', border: '1px solid #334155', position: 'relative' }}>
-                  
-                  {isCompareMode ? (
-                    <div style={{ display: 'flex', width: '100%', height: '200px' }}>
-                      <div style={{ flex: 1, position: 'relative', borderRight: '2px dashed #0f172a' }}>
-                        <div style={{ position: 'absolute', top: '0.5rem', left: '0.5rem', zIndex: 10, padding: '0.2rem 0.4rem', backgroundColor: 'rgba(0,0,0,0.7)', borderRadius: '0.25rem', fontSize: '0.7rem' }}>Baseline</div>
-                        <img src={f.prevUrl} alt="prev frame" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      </div>
-                      <div style={{ flex: 1, position: 'relative' }}>
-                        <div style={{ position: 'absolute', top: '0.5rem', left: '0.5rem', zIndex: 10, padding: '0.2rem 0.4rem', backgroundColor: 'rgba(0,0,0,0.7)', borderRadius: '0.25rem', fontSize: '0.7rem' }}>Current</div>
-                        <img src={f.url} alt="frame" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        {f.bboxes.map((b, i) => (
-                          <div key={i} style={{ position: 'absolute', top: `${b.y}%`, left: `${b.x}%`, width: `${b.w}%`, height: `${b.h}%`, border: '2px solid red', pointerEvents: 'none' }} />
-                        ))}
-                      </div>
+          {/* Dynamic Main Content: Grid OR Map */}
+          <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:14 }}>
+            {viewMode === 'map' ? (
+              <div style={{ flex:1, position:'relative' }}>
+                <InteractivePathMap frames={flightFrames} selectedId={activeFrameId} onSelect={setActiveFrameId} />
+                {activeFrameId && (
+                  <div className="stride-card" style={{ position:'absolute', top:20, right:20, width:300, zIndex:20 }}>
+                    <div className="card-header" style={{ justifyContent:'space-between' }}>
+                      <span className="card-header-title">Frame Inspector</span>
+                      <button className="btn btn-ghost btn-sm" style={{ padding:4 }} onClick={()=>setActiveFrameId(null)}><XCircle size={14}/></button>
                     </div>
-                  ) : (
-                    <div style={{ position: 'relative' }}>
-                      <img src={f.url} alt="frame" style={{ width: '100%', height: '200px', objectFit: 'cover' }} />
-                      {f.bboxes.map((b, i) => (
-                        <div key={i} style={{ position: 'absolute', top: `${b.y}%`, left: `${b.x}%`, width: `${b.w}%`, height: `${b.h}%`, border: '2px solid red', pointerEvents: 'none' }} />
-                      ))}
-                    </div>
-                  )}
-
-                  <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.5rem' }}>
-                    {f.flagged && (
-                      <div style={{ padding: '0.25rem 0.5rem', borderRadius: '0.25rem', fontSize: '0.75rem', fontWeight: 'bold', backgroundColor: '#ef4444', color: 'white' }}>
-                        🚩 URGENT
+                    {(() => {
+                      const f = flightFrames.find(x=>x.id===activeFrameId);
+                      if(!f) return null;
+                      return (
+                        <div style={{ padding:14 }}>
+                          <img src={f.url} style={{ width:'100%', height:160, objectFit:'cover', borderRadius:'var(--radius-sm)', marginBottom:10 }} />
+                          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                            <div className="badge" style={{ background:statusBg(f.status), color:statusColor(f.status), border:`1px solid ${statusColor(f.status)}40` }}>{f.status}</div>
+                            {f.type !== 'none' && <div style={{ fontSize:11, fontWeight:700, color:statusColor(f.status), textTransform:'uppercase' }}>{f.type}</div>}
+                          </div>
+                          <div style={{ fontSize:11, color:'var(--text-muted)' }}>GPS: {f.lat.toFixed(6)}, {f.lon.toFixed(6)}</div>
+                          <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:10 }}>Zone: {f.metadata.zone}</div>
+                          <button className="btn btn-primary" style={{ width:'100%', justifyContent:'center' }} onClick={()=>handleFlag(f.id)}>Flag for Review</button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ flex:1, display:'grid', gridTemplateColumns: isCompare?'repeat(2,1fr)':'repeat(3,1fr)', gap:14, alignContent:'start' }}>
+                {filtered.map(f=>(
+                  <div key={f.id} className="stride-card stride-card-glow" style={{ overflow:'hidden' }}>
+                    <div style={{ position:'relative' }}>
+                      {isCompare ? (
+                        <div style={{ display:'flex', height:180 }}>
+                          <div style={{ flex:1, position:'relative', borderRight:'2px dashed var(--border-active)' }}>
+                            <div className="glass badge" style={{ position:'absolute', top:8, left:8, zIndex:5 }}>Baseline</div>
+                            <img src={f.prevUrl} alt="prev" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                          </div>
+                          <div style={{ flex:1, position:'relative' }}>
+                            <div className="glass badge" style={{ position:'absolute', top:8, left:8, zIndex:5 }}>Current</div>
+                            <img src={f.url} alt="curr" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                            {f.bboxes.map((b,i)=><div key={i} style={{ position:'absolute', top:`${b.y}%`, left:`${b.x}%`, width:`${b.w}%`, height:`${b.h}%`, border:'2px solid var(--accent-red)', pointerEvents:'none', borderRadius:2 }} />)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ position:'relative', height:180 }}>
+                          <img src={f.url} alt="frame" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                          {f.bboxes.map((b,i)=><div key={i} style={{ position:'absolute', top:`${b.y}%`, left:`${b.x}%`, width:`${b.w}%`, height:`${b.h}%`, border:'2px solid var(--accent-red)', pointerEvents:'none', borderRadius:2 }} />)}
+                        </div>
+                      )}
+                      
+                      {/* Badges Overlay */}
+                      <div style={{ position:'absolute', top:8, right:8, display:'flex', gap:6, zIndex:10 }}>
+                        {f.flagged && <div className="badge badge-red"><Flag size={10}/> URGENT</div>}
+                        <div className="badge" style={{ background:statusBg(f.status), color:statusColor(f.status), border:`1px solid ${statusColor(f.status)}40` }}>{f.status}</div>
                       </div>
-                    )}
-                    {!f.flagged && (
-                       <button onClick={() => handleFlagFrame(f.id)} style={{ padding: '0.25rem 0.5rem', borderRadius: '0.25rem', fontSize: '0.75rem', fontWeight: 'bold', backgroundColor: 'rgba(0,0,0,0.5)', color: 'white', border: '1px solid #ef4444', cursor: 'pointer' }}>
-                         Flag
-                       </button>
-                    )}
-                    <div style={{ padding: '0.25rem 0.5rem', borderRadius: '0.25rem', fontSize: '0.75rem', fontWeight: 'bold', backgroundColor: f.status === 'CRITICAL' ? '#ef4444' : f.status === 'DEFECT' ? '#f97316' : '#22c55e', color: 'white' }}>
-                      {f.status}
+                      
+                      {/* Compare Metrics Overlay */}
+                      {isCompare && f.ssim < 0.85 && (
+                        <div style={{ position:'absolute', bottom:8, right:8, zIndex:10 }}>
+                          <div className="badge badge-red">Deterioration: {Math.round((1-f.ssim)*100)}%</div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div style={{ padding:'12px 14px' }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                        <div>
+                          {f.type !== 'none' && <div style={{ fontSize:12, fontWeight:700, color:statusColor(f.status), textTransform:'uppercase', letterSpacing:'0.05em' }}>{f.type}</div>}
+                          <div style={{ fontSize:11, color:'var(--text-primary)', marginTop:2 }}><Crosshair size={10} style={{display:'inline', marginRight:4}}/>{f.metadata.zone}</div>
+                        </div>
+                        <div style={{ textAlign:'right' }}>
+                          <div style={{ fontSize:10, color:'var(--text-muted)' }}>{new Date(f.ts).toLocaleTimeString([],{hour12:false})}</div>
+                          <div style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'var(--font-mono)' }}>{f.lat.toFixed(5)}, {f.lon.toFixed(5)}</div>
+                        </div>
+                      </div>
+                      
+                      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                        <div className="progress-track" style={{ flex:1 }}>
+                          <div className="progress-fill" style={{ width:`${f.conf}%`, background: f.conf>90?'var(--accent-green)':'var(--accent-amber)' }} />
+                        </div>
+                        <span style={{ fontSize:11, fontWeight:600, color:'var(--text-secondary)', width:35 }}>{f.conf}%</span>
+                        {!f.flagged && (
+                          <button className="btn btn-ghost btn-sm" style={{ padding:'4px 8px' }} onClick={()=>handleFlag(f.id)}>
+                            <Flag size={12}/>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
-
-                  {isCompareMode && f.ssim < 0.85 && (
-                    <div style={{ position: 'absolute', top: '2.5rem', right: '0.5rem', padding: '0.25rem 0.5rem', borderRadius: '0.25rem', fontSize: '0.75rem', fontWeight: 'bold', backgroundColor: '#ef4444', color: 'white' }}>
-                      ↑ {Math.round((1 - f.ssim)*100)}% deterioration
-                    </div>
-                  )}
-
-                  <div style={{ padding: '1rem' }}>
-                    {f.type !== 'none' && <div style={{ color: '#ef4444', fontWeight: 'bold', marginBottom: '0.5rem' }}>{f.type.toUpperCase()}</div>}
-                    <div style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{f.lat.toFixed(4)}, {f.lon.toFixed(4)} | Zone: {f.metadata.zone}</span>
-                      <span>{new Date(f.ts).toLocaleTimeString()}</span>
-                    </div>
-                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <div style={{ flex: 1, height: '4px', backgroundColor: '#334155', borderRadius: '2px' }}>
-                        <div style={{ width: `${f.conf}%`, height: '100%', backgroundColor: f.conf > 90 ? '#22c55e' : '#eab308', borderRadius: '2px' }} />
-                      </div>
-                      <span style={{ fontSize: '0.75rem' }}>{f.conf}%</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Timeline Chart */}
-            <div style={{ padding: '1rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', border: '1px solid #334155', marginTop: 'auto' }}>
-               <h3 style={{ margin: '0 0 1rem 0', fontSize: '1rem' }}>Defect Timeline by Zone</h3>
-               <div style={{ height: '200px', width: '100%' }}>
-                 <Line data={chartData} options={{ responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { color: '#94a3b8' }, grid: { color: '#334155' } }, x: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } } }, plugins: { legend: { labels: { color: '#fff' } } } }} />
-               </div>
-            </div>
-
+                ))}
+              </div>
+            )}
           </div>
+
+          {/* Timeline Scrubber */}
+          <div className="stride-card" style={{ padding:'14px 16px', flexShrink:0, display:'flex', flexDirection:'column', gap:8 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontSize:11, fontWeight:700, textTransform:'uppercase', color:'var(--text-muted)' }}>Flight Timeline</div>
+              <div style={{ fontSize:11, color:'var(--text-secondary)', fontFamily:'var(--font-mono)' }}>{flightFrames.length} Frames</div>
+            </div>
+            
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <button className="btn btn-ghost" style={{ padding:4 }}><Play size={14}/></button>
+              
+              <div style={{ flex:1, height:24, background:'var(--bg-secondary)', borderRadius:'var(--radius-sm)', border:'1px solid var(--border-primary)', position:'relative', display:'flex', alignItems:'center', padding:'0 4px', overflow:'hidden' }}>
+                {flightFrames.map((f, i) => {
+                  const isActive = f.id === activeFrameId;
+                  const isFiltered = filtered.some(x=>x.id===f.id);
+                  return (
+                    <div 
+                      key={f.id}
+                      onClick={()=>setActiveFrameId(f.id)}
+                      style={{ 
+                        flex:1, 
+                        height: isActive ? 20 : 12, 
+                        background: isFiltered ? statusColor(f.status) : 'var(--border-primary)', 
+                        margin:'0 1px', 
+                        borderRadius:2,
+                        opacity: isActive ? 1 : isFiltered ? 0.8 : 0.3,
+                        cursor:'pointer',
+                        transition:'all 0.1s'
+                      }}
+                      title={`${new Date(f.ts).toLocaleTimeString()} - ${f.status}`}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
     </PageShell>
   );
+}
+
+export default function MapPage() {
+  return <ToastProvider><AnalysisContent /></ToastProvider>;
 }

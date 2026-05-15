@@ -1,63 +1,46 @@
 import React from 'react';
 
 interface SkeletonBlockProps {
-  rows?: number;
-  height?: string;
   className?: string;
+  style?: React.CSSProperties;
+  width?: string | number;
+  height?: string | number;
+  rounded?: boolean;
 }
 
-export function SkeletonBlock({ rows = 1, height, className = '' }: SkeletonBlockProps) {
-  if (rows > 1) {
-    return (
-      <div className={`flex flex-col gap-2 ${className}`}>
-        {Array.from({ length: rows }).map((_, i) => (
-          <div
-            key={i}
-            className="bg-[#21262d] rounded animate-pulse w-full"
-            style={{ height: height || '24px' }}
-          />
-        ))}
-      </div>
-    );
-  }
-
+export function SkeletonBlock({ className = '', style, width, height, rounded = false }: SkeletonBlockProps) {
   return (
     <div
-      className={`bg-[#21262d] rounded animate-pulse w-full ${className}`}
-      style={height ? { height } : {}}
+      className={`skeleton ${className}`}
+      style={{
+        width: width ?? '100%',
+        height: height ?? 16,
+        borderRadius: rounded ? '999px' : 'var(--radius-sm)',
+        ...style,
+      }}
     />
   );
 }
 
-export function SkeletonCard({ className = '' }: { className?: string }) {
+export function SkeletonText({ lines = 3 }: { lines?: number }) {
   return (
-    <div className={`bg-[#1c2128] border border-[#30363d] rounded-xl p-4 flex flex-col gap-3 ${className}`}>
-      <SkeletonBlock height="20px" className="w-1/3" />
-      <SkeletonBlock height="64px" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {Array.from({ length: lines }).map((_, i) => (
+        <SkeletonBlock key={i} height={14} width={i === lines - 1 ? '60%' : '100%'} />
+      ))}
     </div>
   );
 }
 
-export function SkeletonTable({ className = '' }: { className?: string }) {
+export function SkeletonCard({ height = 120 }: { height?: number }) {
   return (
-    <div className={`bg-[#1c2128] border border-[#30363d] rounded-xl overflow-hidden ${className}`}>
-      <div className="bg-[#161b22] border-b border-[#30363d] p-3">
-        <SkeletonBlock height="16px" className="w-1/4" />
-      </div>
-      <div className="p-4 flex flex-col gap-4">
-        <SkeletonBlock height="16px" />
-        <SkeletonBlock height="16px" className="w-11/12" />
-        <SkeletonBlock height="16px" className="w-10/12" />
-      </div>
-    </div>
-  );
-}
-
-export function SkeletonStat({ className = '' }: { className?: string }) {
-  return (
-    <div className={`bg-[#1c2128] border border-[#30363d] rounded-xl p-4 flex flex-col items-center justify-center gap-2 ${className}`}>
-      <SkeletonBlock height="14px" className="w-1/2" />
-      <SkeletonBlock height="36px" className="w-3/4" />
-    </div>
+    <div
+      className="skeleton"
+      style={{
+        height,
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--border-primary)',
+      }}
+    />
   );
 }

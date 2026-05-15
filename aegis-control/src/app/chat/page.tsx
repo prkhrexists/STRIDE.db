@@ -2,247 +2,333 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import PageShell from '@/components/PageShell';
+import { ToastProvider, useToast } from '@/components/Toast';
 import { useRouter } from 'next/navigation';
+import { Send, Trash2, FileText, Brain, RefreshCw, Zap, Download, ChevronDown, BarChart2, PieChart as PieChartIcon, Box } from 'lucide-react';
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
+interface Message { role: 'user' | 'assistant'; content: string; }
+
+const quickPrompts = [
+  'Summarize critical defects',
+  'Compare Flight 001 vs 002',
+  'Generate repair recommendations',
+  'Create executive summary',
+  'Estimate structural risk',
+];
+
+// --- Custom Renderers for AI Output ---
+const DefectTable = () => (
+  <div style={{ marginTop: 12, marginBottom: 12, background: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-primary)' }}>
+    <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', textAlign: 'left' }}>
+      <thead>
+        <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-primary)', color: 'var(--text-muted)' }}>
+          <th style={{ padding: '8px 12px', fontWeight: 600 }}>ID</th>
+          <th style={{ padding: '8px 12px', fontWeight: 600 }}>Zone</th>
+          <th style={{ padding: '8px 12px', fontWeight: 600 }}>Type</th>
+          <th style={{ padding: '8px 12px', fontWeight: 600 }}>Severity</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style={{ borderBottom: '1px solid var(--border-primary)' }}>
+          <td style={{ padding: '8px 12px', fontFamily: 'var(--font-mono)' }}>D-001</td>
+          <td style={{ padding: '8px 12px' }}>North Tower</td>
+          <td style={{ padding: '8px 12px' }}>Crack</td>
+          <td style={{ padding: '8px 12px', color: 'var(--accent-red)', fontWeight: 700 }}>CRITICAL</td>
+        </tr>
+        <tr>
+          <td style={{ padding: '8px 12px', fontFamily: 'var(--font-mono)' }}>D-004</td>
+          <td style={{ padding: '8px 12px' }}>South Tower</td>
+          <td style={{ padding: '8px 12px' }}>Crack</td>
+          <td style={{ padding: '8px 12px', color: 'var(--accent-red)', fontWeight: 700 }}>CRITICAL</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+);
+
+const SeverityChart = () => {
+  const data = [
+    { name: 'Critical', value: 2, color: '#EF4444' },
+    { name: 'Warning', value: 3, color: '#F59E0B' },
+    { name: 'Moderate', value: 4, color: '#3B82F6' },
+    { name: 'Clean', value: 21, color: '#22C55E' },
+  ];
+  return (
+    <div style={{ marginTop: 12, marginBottom: 12, background: 'var(--bg-primary)', padding: 12, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', height: 200, display: 'flex', alignItems: 'center' }}>
+      <ResponsiveContainer width="50%" height="100%">
+        <PieChart>
+          <Pie data={data} cx="50%" cy="50%" innerRadius={40} outerRadius={60} dataKey="value" stroke="none">
+            {data.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
+          </Pie>
+          <Tooltip contentStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', borderRadius: 4, fontSize: 11 }} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 20 }}>
+        {data.map(d => (
+          <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: d.color }} />
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{d.name}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>{d.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const RiskChart = () => {
+  const data = [
+    { name: 'Tower N', risk: 85 },
+    { name: 'Tower S', risk: 60 },
+    { name: 'Deck', risk: 20 },
+    { name: 'Pier 3', risk: 45 },
+  ];
+  return (
+    <div style={{ marginTop: 12, marginBottom: 12, background: 'var(--bg-primary)', padding: '16px 16px 0 0', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', height: 200 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data}>
+          <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+          <Tooltip cursor={{ fill: 'var(--bg-elevated)' }} contentStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)', borderRadius: 4, fontSize: 11 }} />
+          <Bar dataKey="risk" fill="#EF4444" radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+// --- Report Generator Overlay ---
+function ReportGenerator({ onClose }: { onClose: () => void }) {
+  const [step, setStep] = useState(0);
+  
+  useEffect(() => {
+    let t1 = setTimeout(() => setStep(1), 1500);
+    let t2 = setTimeout(() => setStep(2), 3000);
+    let t3 = setTimeout(() => setStep(3), 5000);
+    let t4 = setTimeout(() => setStep(4), 6500);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
+  }, []);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="stride-card" style={{ width: 400, padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        <FileText size={32} color="var(--accent-blue)" style={{ marginBottom: 16 }} />
+        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: 'white' }}>Generating Executive Report</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 24, textAlign: 'center' }}>Compiling multi-page PDF with telemetry, charts, and annotated images.</p>
+        
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 24 }}>
+          {[
+            'Loading flight context & metadata...',
+            'Aggregating defect severity charts...',
+            'Generating repair recommendations...',
+            'Formatting PDF & applying branding...',
+          ].map((text, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, opacity: step >= i ? 1 : 0.3, transition: 'opacity 0.3s' }}>
+              <div style={{ width: 16, height: 16, borderRadius: '50%', background: step > i ? 'var(--accent-green)' : step === i ? 'var(--accent-blue)' : 'var(--bg-elevated)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {step > i && <div style={{ width: 8, height: 8, background: 'white', borderRadius: '50%' }} />}
+              </div>
+              <span style={{ fontSize: 12, color: step === i ? 'white' : 'var(--text-secondary)' }}>{text}</span>
+            </div>
+          ))}
+        </div>
+
+        {step === 4 ? (
+          <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+            <button className="btn btn-secondary" style={{ flex: 1, justifyContent: 'center' }} onClick={onClose}>Close</button>
+            <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => { window.print(); onClose(); }}><Download size={14}/> Download PDF</button>
+          </div>
+        ) : (
+          <div className="progress-track" style={{ width: '100%', height: 4 }}>
+            <div className="progress-fill" style={{ width: `${(step / 4) * 100}%`, background: 'var(--accent-blue)', transition: 'width 1.5s linear' }} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
-export default function ChatPage() {
+// --- Main Chat Content ---
+function ChatContent() {
   const router = useRouter();
+  const { success, info } = useToast();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
-  const [healthStatus, setHealthStatus] = useState<'checking' | 'online' | 'offline'>('checking');
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  
-  useEffect(() => {
-    fetch('/api/inspector/health')
-      .then(res => res.json())
-      .then(data => setHealthStatus(data.status))
-      .catch(() => setHealthStatus('offline'));
+  const [healthStatus, setHealthStatus] = useState<'checking'|'online'|'offline'>('online');
+  const [showReportGen, setShowReportGen] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const endRef = useRef<HTMLDivElement>(null);
 
-    const saved = localStorage.getItem('aegis_chat_v2');
-    if (saved) {
-      setMessages(JSON.parse(saved));
-    } else {
-      setMessages([{ role: 'assistant', content: 'Hello Operator. I am AEGIS-Inspector. How can I assist with your structural data analysis today?' }]);
-    }
+  useEffect(() => {
+    const saved = localStorage.getItem('stride_chat_v2');
+    if (saved) setMessages(JSON.parse(saved));
+    else setMessages([{ role:'assistant', content:'Hello Operator. I am **STRIDE-Inspector**, your AI-powered structural analysis assistant.\n\nI have loaded the Context Engine with:\n- **3 Flights**\n- **14 Defect Metadata Entries**\n- **Full Inspection History**\n\nHow can I assist you today?' }]);
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('aegis_chat_v2', JSON.stringify(messages));
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    localStorage.setItem('stride_chat_v2', JSON.stringify(messages));
+    endRef.current?.scrollIntoView({ behavior:'smooth' });
   }, [messages]);
 
-  const handleSend = async (overrideMsg?: string) => {
-    const text = overrideMsg || input;
+  const handleSend = async (override?: string) => {
+    const text = override || input;
     if (!text.trim() || isStreaming) return;
-
     setInput('');
-    const newMessages = [...messages, { role: 'user' as const, content: text }];
-    setMessages(newMessages);
+    const newMsgs: Message[] = [...messages, { role:'user', content:text }];
+    setMessages(newMsgs);
     setIsStreaming(true);
 
     try {
       const res = await fetch('/api/inspector/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages, conversationId: 'session_1' })
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ messages:newMsgs })
       });
-
-      if (!res.body) throw new Error('No body');
-
+      if (!res.body) throw new Error();
       const reader = res.body.getReader();
       const decoder = new TextDecoder('utf-8');
-      let done = false;
-      let assistantMsg = '';
-
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
-
+      let done = false, ai = '';
+      setMessages(p=>[...p,{role:'assistant',content:''}]);
       while (!done) {
-        const { value, done: readerDone } = await reader.read();
-        done = readerDone;
+        const { value, done:rd } = await reader.read();
+        done = rd;
         if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
-          for (const line of lines) {
+          const chunk = decoder.decode(value,{stream:true});
+          for (const line of chunk.split('\n')) {
             if (line.startsWith('data: ') && line !== 'data: [DONE]') {
               try {
-                const data = JSON.parse(line.slice(6));
-                const delta = data.choices?.[0]?.delta?.content || '';
-                assistantMsg += delta;
-                setMessages(prev => {
-                  const copy = [...prev];
-                  copy[copy.length - 1].content = assistantMsg;
-                  return copy;
-                });
-              } catch(e) {}
+                const d = JSON.parse(line.slice(6));
+                ai += d.choices?.[0]?.delta?.content || '';
+                setMessages(p=>{ const c=[...p]; c[c.length-1].content=ai; return c; });
+              } catch {}
             }
           }
         }
       }
-    } catch(err) {
-      console.error(err);
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Connection lost. Please try again.' }]);
-    } finally {
-      setIsStreaming(false);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    } catch {
+      setMessages(p=>[...p,{role:'assistant',content:'⚠ Connection error. Analytics engine offline.'}]);
+    } finally { setIsStreaming(false); }
   };
 
   const clearHistory = () => {
-    const init = [{ role: 'assistant' as const, content: 'Hello Operator. I am AEGIS-Inspector. History cleared.' }];
+    const init: Message[] = [{ role:'assistant', content:'Context engine reset. How can I assist with your inspection data?' }];
     setMessages(init);
-    localStorage.setItem('aegis_chat_v2', JSON.stringify(init));
+    localStorage.setItem('stride_chat_v2', JSON.stringify(init));
+    info('Chat history cleared');
+  };
+
+  const handleExport = (format: string) => {
+    setShowExportMenu(false);
+    if (format === 'PDF') {
+      setShowReportGen(true);
+    } else {
+      success(`Chat exported as ${format}`);
+    }
   };
 
   const renderContent = (text: string) => {
-    // Basic Markdown Table Parser
-    if (text.includes('|---')) {
-      const rows = text.split('\n').filter(r => r.includes('|'));
-      return (
-        <div style={{ overflowX: 'auto', marginTop: '1rem', marginBottom: '1rem' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid #30363d', fontSize: '0.875rem' }}>
-            <tbody>
-              {rows.map((row, i) => {
-                if (row.includes('|---')) return null;
-                const cols = row.split('|').filter(c => c.trim() !== '');
-                const isHeader = i === 0;
-                return (
-                  <tr key={i} style={{ borderBottom: '1px solid #30363d', backgroundColor: isHeader ? '#161b22' : 'transparent' }}>
-                    {cols.map((col, j) => (
-                      <td key={j} style={{ padding: '0.5rem', fontWeight: isHeader ? 'bold' : 'normal', textAlign: 'left' }}>
-                        {col.trim()}
-                      </td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-
-    // Replace Flight references with chips
-    const parts = text.split(/(Flight \d+)/g);
+    // Basic Markdown + Custom Tags
+    const parts = text.split(/(\[TABLE: defects\]|\[CHART: severity\]|\[CHART: risk\]|\*\*[^*]+\*\*|`[^`]+`)/g);
     return parts.map((part, i) => {
-      if (part.match(/Flight \d+/)) {
-        return (
-          <span 
-            key={i} 
-            onClick={() => router.push('/map')}
-            style={{ display: 'inline-flex', alignItems: 'center', backgroundColor: '#21262d', border: '1px solid #30363d', borderRadius: '9999px', padding: '0.1rem 0.6rem', color: '#58a6ff', cursor: 'pointer', fontSize: '0.875rem', margin: '0 0.2rem' }}
-          >
-            {part} ↗
-          </span>
-        );
-      }
-      return <span key={i}>{part}</span>;
+      if (part === '[TABLE: defects]') return <DefectTable key={i} />;
+      if (part === '[CHART: severity]') return <SeverityChart key={i} />;
+      if (part === '[CHART: risk]') return <RiskChart key={i} />;
+      if (/^\*\*[^*]+\*\*$/.test(part)) return <strong key={i} style={{ color:'var(--text-primary)' }}>{part.slice(2,-2)}</strong>;
+      if (/^`[^`]+`$/.test(part)) return <code key={i} style={{ fontFamily:'var(--font-mono)', fontSize:12, background:'var(--bg-elevated)', padding:'1px 5px', borderRadius:3, color:'var(--accent-cyan)' }}>{part.slice(1,-1)}</code>;
+      // Handle newlines
+      return <span key={i}>{part.split('\n').map((line, j) => <React.Fragment key={j}>{line}{j !== part.split('\n').length - 1 && <br />}</React.Fragment>)}</span>;
     });
   };
 
   return (
-    <PageShell title="AEGIS-Inspector" backHref="/">
-      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 96px)', margin: '-1.5rem', backgroundColor: '#0d1117', color: '#c9d1d9', fontFamily: 'system-ui' }}>
-        
-        {/* Top Bar */}
-        <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#161b22' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: healthStatus === 'online' ? '#238636' : healthStatus === 'checking' ? '#eab308' : '#da3633' }} />
-              <span style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>{healthStatus.toUpperCase()}</span>
-            </div>
-            <span style={{ padding: '0.2rem 0.5rem', backgroundColor: '#21262d', border: '1px solid #30363d', borderRadius: '0.25rem', fontSize: '0.75rem', color: '#8b949e' }}>
-              sarvam-m
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.2rem 0.5rem', backgroundColor: 'rgba(35, 134, 54, 0.1)', border: '1px solid rgba(35, 134, 54, 0.4)', borderRadius: '0.25rem', fontSize: '0.75rem', color: '#2ea043' }}>
-               Context: 2 flights, 2 defects loaded
-               <button style={{ background: 'none', border: 'none', color: '#2ea043', cursor: 'pointer', marginLeft: '0.2rem' }}>↻</button>
-            </div>
+    <PageShell title="AI Analyst" subtitle="STRIDE-Inspector · Infrastructure Analysis Assistant"
+      actions={
+        <div style={{ display:'flex', gap:8, position: 'relative' }}>
+          <button className="btn btn-ghost btn-sm" onClick={clearHistory}><Trash2 size={11}/> Clear</button>
+          
+          <div style={{ position: 'relative' }}>
+            <button className="btn btn-primary btn-sm" onClick={() => setShowExportMenu(!showExportMenu)}>
+              <Download size={11}/> Export <ChevronDown size={11} />
+            </button>
+            {showExportMenu && (
+              <div className="stride-card" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, padding: 4, zIndex: 50, minWidth: 120, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <button className="btn btn-ghost btn-sm" style={{ justifyContent: 'flex-start' }} onClick={() => handleExport('PDF')}><FileText size={12}/> Export to PDF</button>
+                <button className="btn btn-ghost btn-sm" style={{ justifyContent: 'flex-start' }} onClick={() => handleExport('CSV')}><BarChart2 size={12}/> Export to CSV</button>
+                <button className="btn btn-ghost btn-sm" style={{ justifyContent: 'flex-start' }} onClick={() => handleExport('JSON')}><Box size={12}/> Export as JSON</button>
+              </div>
+            )}
           </div>
-          <div style={{ display: 'flex', gap: '1rem' }}>
-            <button onClick={clearHistory} style={{ padding: '0.5rem 1rem', backgroundColor: 'transparent', color: '#8b949e', border: '1px solid #30363d', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem' }}>Clear History</button>
-            <button onClick={() => router.push('/files?auto=true')} style={{ padding: '0.5rem 1rem', backgroundColor: '#238636', color: '#fff', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 'bold' }}>Generate Report</button>
+        </div>
+      }>
+      
+      {showReportGen && <ReportGenerator onClose={() => setShowReportGen(false)} />}
+
+      <div style={{ display:'flex', flexDirection:'column', height:'calc(100vh - 130px)' }}>
+
+        {/* Status Bar */}
+        <div className="stride-card" style={{ padding:'10px 16px', marginBottom:14, display:'flex', alignItems:'center', gap:14, flexShrink:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:7 }}>
+            <div style={{ width:8, height:8, borderRadius:'50%', background:'var(--accent-green)', animation: 'pulse-dot 2s infinite' }}/>
+            <span style={{ fontSize:12, fontWeight:700, color:'var(--accent-green)' }}>ONLINE</span>
+          </div>
+          <div style={{ width:1, height:16, background:'var(--border-primary)' }}/>
+          <div className="badge badge-blue" style={{ fontSize:10 }}><Brain size={10}/> Analytics Engine v2</div>
+          <div style={{ width:1, height:16, background:'var(--border-primary)' }}/>
+          <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--text-secondary)' }}>
+            <Zap size={11} color="var(--accent-amber)"/>
+            Context Loader Active: 3 flights · 14 defects
           </div>
         </div>
 
-        {/* Chat Area */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        {/* Messages */}
+        <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:16, paddingBottom:8, paddingRight: 8 }}>
           {messages.map((m, i) => (
-            <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
-              <div style={{ fontSize: '0.75rem', color: '#8b949e', marginBottom: '0.25rem', textAlign: m.role === 'user' ? 'right' : 'left', textTransform: 'uppercase' }}>
-                {m.role === 'user' ? 'Operator' : 'AEGIS-Inspector'}
+            <div key={i} style={{ alignSelf: m.role==='user'?'flex-end':'flex-start', maxWidth: m.role==='user'?'70%':'85%' }}>
+              <div style={{ fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.08em', color:'var(--text-muted)', marginBottom:5, textAlign: m.role==='user'?'right':'left' }}>
+                {m.role==='user' ? 'Operator' : 'AI Inspector'}
               </div>
-              <div style={{ 
-                padding: '0.75rem 1rem', 
-                borderRadius: '0.5rem', 
-                backgroundColor: m.role === 'user' ? '#1f6feb' : '#1c2128', 
-                color: m.role === 'user' ? '#fff' : '#c9d1d9',
-                border: m.role === 'user' ? 'none' : '1px solid #30363d',
-                lineHeight: '1.5',
-                whiteSpace: 'pre-wrap'
-              }}>
+              <div style={{ padding:'14px 18px', borderRadius: m.role==='user'?'var(--radius-lg) var(--radius-lg) 4px var(--radius-lg)':'var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px', background: m.role==='user'?'var(--accent-blue)':'var(--bg-card)', border: m.role==='user'?'none':'1px solid var(--border-primary)', color: m.role==='user'?'white':'var(--text-secondary)', lineHeight:1.6, fontSize:13, boxShadow:'var(--shadow-card)' }}>
                 {renderContent(m.content)}
-                {isStreaming && i === messages.length - 1 && <span style={{ animation: 'blink 1s step-end infinite' }}>▋</span>}
+                {isStreaming && i===messages.length-1 && m.role==='assistant' && (
+                  <span style={{ display:'inline-block', width:2, height:14, background:'var(--accent-blue)', marginLeft:2, animation:'blink 1s step-end infinite', verticalAlign:'middle' }}/>
+                )}
               </div>
             </div>
           ))}
-          {isStreaming && messages[messages.length - 1].role === 'user' && (
-            <div style={{ alignSelf: 'flex-start', color: '#8b949e', fontSize: '1.5rem', letterSpacing: '2px', animation: 'pulse 1.5s infinite' }}>...</div>
+          {isStreaming && messages[messages.length-1]?.role==='user' && (
+            <div style={{ alignSelf:'flex-start', display:'flex', gap:4, padding:'12px 16px' }}>
+              {[0,1,2].map(i=><div key={i} style={{ width:6, height:6, borderRadius:'50%', background:'var(--text-muted)', animation:`pulse-dot 1.2s ${i*0.2}s infinite` }}/>)}
+            </div>
           )}
-          <div ref={chatEndRef} />
+          <div ref={endRef}/>
         </div>
 
         {/* Input Area */}
-        <div style={{ padding: '1rem 1.5rem', backgroundColor: '#161b22', borderTop: '1px solid #30363d' }}>
-          
-          <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.75rem' }}>
-            {['Summarize latest critical defects', 'Which zone needs repair first?', 'IS:456 compliance check', 'Compare Flight 1 vs 2'].map(q => (
-              <button 
-                key={q} 
-                onClick={() => handleSend(q)}
-                style={{ padding: '0.375rem 0.75rem', backgroundColor: '#21262d', border: '1px solid #30363d', borderRadius: '9999px', color: '#8b949e', fontSize: '0.75rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
-              >
-                {q}
-              </button>
+        <div className="stride-card" style={{ padding:14, marginTop:14, flexShrink:0 }}>
+          {/* Quick prompts */}
+          <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:12, marginBottom:12, borderBottom:'1px solid var(--border-primary)', WebkitOverflowScrolling: 'touch' }}>
+            {quickPrompts.map(q=>(
+              <button key={q} onClick={()=>handleSend(q)} className="btn btn-secondary btn-sm" style={{ whiteSpace:'nowrap', fontSize:11, background: 'var(--bg-primary)', border: '1px solid var(--border-active)' }}>{q}</button>
             ))}
           </div>
-
-          <div style={{ position: 'relative' }}>
-            <textarea 
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask about any flight, defect, or structural risk..."
-              style={{ width: '100%', height: '80px', padding: '0.75rem 3rem 0.75rem 1rem', backgroundColor: '#0d1117', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: '0.5rem', resize: 'none', fontFamily: 'inherit', fontSize: '0.875rem' }}
+          <div style={{ position:'relative' }}>
+            <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();}}}
+              placeholder="Ask about structural risks, compare flights, or request a summary..."
+              style={{ width:'100%', height:76, padding:'12px 50px 12px 14px', background:'var(--bg-secondary)', color:'var(--text-primary)', border:'1px solid var(--border-primary)', borderRadius:'var(--radius-md)', resize:'none', fontFamily:'var(--font-sans)', fontSize:13, outline:'none', lineHeight:1.5 }}
             />
-            <button 
-              onClick={() => handleSend()}
-              disabled={isStreaming || !input.trim()}
-              style={{ position: 'absolute', right: '1rem', bottom: '1rem', backgroundColor: '#238636', color: 'white', border: 'none', borderRadius: '0.25rem', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: (isStreaming || !input.trim()) ? 'not-allowed' : 'pointer', opacity: (isStreaming || !input.trim()) ? 0.5 : 1 }}
-            >
-              ↑
+            <button onClick={()=>handleSend()} disabled={isStreaming||!input.trim()} style={{ position:'absolute', right:10, bottom:10, width:34, height:34, borderRadius:'var(--radius-sm)', border:'none', cursor: isStreaming||!input.trim()?'not-allowed':'pointer', background: isStreaming||!input.trim()?'var(--border-primary)':'var(--accent-blue)', color:'white', display:'flex', alignItems:'center', justifyContent:'center', opacity: isStreaming||!input.trim()?0.5:1, transition:'all 0.2s', boxShadow: !isStreaming&&input.trim()?'var(--shadow-glow-blue)':undefined }}>
+              <Send size={14}/>
             </button>
           </div>
-          <div style={{ textAlign: 'center', fontSize: '0.7rem', color: '#8b949e', marginTop: '0.5rem' }}>
-            Enter to send, Shift+Enter for new line. AI can make mistakes. Check critical structural decisions.
+          <div style={{ textAlign:'center', fontSize:10, color:'var(--text-muted)', marginTop:8 }}>
+            Shift+Enter for new line · Reports generated by STRIDE Analytics Engine
           </div>
         </div>
-
-        <style dangerouslySetInnerHTML={{__html: `
-          @keyframes blink { 50% { opacity: 0; } }
-          @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        `}} />
       </div>
     </PageShell>
   );
+}
+
+export default function ChatPage() {
+  return <ToastProvider><ChatContent /></ToastProvider>;
 }

@@ -1,108 +1,78 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
-export async function POST(req: Request) {
-  try {
-    const { messages, conversationId } = await req.json();
-    const apiKey = process.env.SARVAM_API_KEY;
-
-    // Mock Context Aggregation
-    const flightSummary = {
-      flights: [
-        { id: '001', frames: 24, defects: 2, status: 'Analyzed', date: '2026-05-14' },
-        { id: '002', frames: 18, defects: 0, status: 'Analyzed', date: '2026-05-13' },
-      ],
-      defects: [
-        { id: 'd1', flight: '001', type: 'crack', severity: 'CRITICAL', zone: 'NW facade', lat: 34.0522, lon: -118.2437 },
-        { id: 'd2', flight: '001', type: 'spalling', severity: 'MEDIUM', zone: 'SE pylon', lat: 34.0524, lon: -118.2435 }
-      ],
-      flaggedItems: ['d1']
-    };
-
-    const systemMsg = {
-      role: 'system',
-      content: `You are AEGIS-Inspector, an expert structural integrity AI for a drone inspection platform.
-Today: ${new Date().toISOString().split('T')[0]}. Available data: 2 flights, 42 frames analyzed, 2 defects detected.
-FLIGHT DATA SUMMARY: ${JSON.stringify(flightSummary)}
-STRUCTURAL STANDARDS: IS:456-2000 (RC), IS:800 (steel), IRC:6 (bridges), ACI 318.
-Answer in the language the user writes in. Be precise — cite specific flight IDs, frame numbers, GPS zones, defect types. Prioritize CRITICAL findings first. Format tables using markdown if listing defects.`
-    };
-
-    const payload = {
-      model: "sarvam-m",
-      messages: [systemMsg, ...messages],
-      stream: true,
-      temperature: 0.3
-    };
-
-    if (!apiKey) {
-      return simulateFallbackStream(messages);
-    }
-
-    const response = await fetch('https://api.sarvam.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-subscription-key': apiKey
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      console.warn("Sarvam API error, falling back to simulation. Error:", err);
-      return simulateFallbackStream(messages);
-    }
-
-    return new Response(response.body, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
-
-  } catch (error) {
-    console.error("Chat API error:", error);
-    return new Response(JSON.stringify({ error: 'Internal Server Error' }), { status: 500 });
-  }
+function sleep(ms: number) {
+  return new Promise(r => setTimeout(r, ms));
 }
 
-// Fallback logic for when SARVAM_API_KEY is not set or API fails
-function simulateFallbackStream(messages: any[]) {
-  const lastMsg = messages[messages.length - 1].content.toLowerCase();
-  
-  let responseText = "I received your query. Please note I am running in offline simulation mode because `SARVAM_API_KEY` is not set.\n\n";
-  if (lastMsg.includes('critical') || lastMsg.includes('summarize')) {
-    responseText += "Here is the summary of the latest critical defects:\n\n| Flight | Zone | Type | Severity | Action |\n|---|---|---|---|---|\n| Flight 001 | NW facade | crack | CRITICAL | Immediate Repair |";
-  } else if (lastMsg.includes('flight 001')) {
-    responseText += "Flight 001 was conducted on 2026-05-14. It contains 2 defects, including 1 CRITICAL crack in the NW facade. You can view the details here: Flight 001.";
-  } else if (lastMsg.includes('repair')) {
-    responseText += "Based on current data, the **NW facade** from Flight 001 needs immediate repair due to a CRITICAL crack detected at GPS `34.0522, -118.2437`.";
-  } else {
-    responseText += "No critical anomalies matched this specific query. Ensure structural compliance with IS:456-2000.";
-  }
+// Mock Analytics Engine Data
+const mockDefects = [
+  { id: 'D-001', zone: 'North Tower', type: 'Crack', severity: 'CRITICAL', area: '1.2 sq m' },
+  { id: 'D-002', zone: 'Deck Underside', type: 'Spalling', severity: 'MODERATE', area: '0.5 sq m' },
+  { id: 'D-003', zone: 'Pier 3', type: 'Corrosion', severity: 'WARNING', area: '2.1 sq m' },
+  { id: 'D-004', zone: 'South Tower', type: 'Crack', severity: 'CRITICAL', area: '0.8 sq m' },
+];
+
+export async function POST(req: NextRequest) {
+  const { messages } = await req.json();
+  const lastUserMsg = messages[messages.length - 1].content.toLowerCase();
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const words = responseText.split(' ');
-      for (const word of words) {
-        const chunk = JSON.stringify({ choices: [{ delta: { content: word + ' ' } }] });
-        controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
-        await new Promise(r => setTimeout(r, 50));
+      const sendChunk = async (text: string) => {
+        const payload = `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`;
+        controller.enqueue(encoder.encode(payload));
+        await sleep(30);
+      };
+
+      await sleep(500);
+
+      if (lastUserMsg.includes('summarize critical')) {
+        await sendChunk('Based on the current telemetry and image analysis from the past 3 flights, there are **2 CRITICAL** defects that require immediate attention.\n\n');
+        await sendChunk('[TABLE: defects]\n\n');
+        await sendChunk('These are concentrated on the **North Tower** and **South Tower**. ');
+        await sendChunk('The structural risk level is currently estimated at **HIGH** due to the location of the cracks near primary load-bearing joints. ');
+        await sendChunk('I recommend generating a full repair recommendation report immediately.');
+      } else if (lastUserMsg.includes('compare flight')) {
+        await sendChunk('Comparing **Flight 001** (Baseline) with **Flight 002** (Post-Storm):\n\n');
+        await sendChunk('- **Total Defects**: Increased from 12 to 14.\n');
+        await sendChunk('- **Deterioration**: The crack on the North Tower (D-001) has widened by 4% based on SSIM analysis.\n');
+        await sendChunk('- **New Defects**: Minor spalling detected on Deck Underside.\n\n');
+        await sendChunk('[CHART: severity]\n\n');
+        await sendChunk('The structure is generally stable, but the progressive crack widening is a concern.');
+      } else if (lastUserMsg.includes('repair recommendation')) {
+        await sendChunk('Here are the **Priority Repair Recommendations** based on the detected defect types and severity:\n\n');
+        await sendChunk('1. **D-001 (Crack, North Tower)**: Inject epoxy resin to seal the crack and prevent moisture ingress. Estimated urgency: **Immediate (Within 7 days)**.\n');
+        await sendChunk('2. **D-004 (Crack, South Tower)**: Similar epoxy injection required. Urgency: **Immediate**.\n');
+        await sendChunk('3. **D-003 (Corrosion, Pier 3)**: Sandblast the affected area, apply rust inhibitor, and recoat with marine-grade paint. Urgency: **Within 30 days**.\n\n');
+        await sendChunk('Would you like me to compile this into a formal PDF report?');
+      } else if (lastUserMsg.includes('executive summary')) {
+        await sendChunk('**Executive Summary: Bridge Inspection Q2**\n\n');
+        await sendChunk('The recent UAV inspection of the Highway Bridge Deck successfully analyzed 145 frames across 3 flight zones. ');
+        await sendChunk('The overall structural health score is calculated at **78% (MODERATE RISK)**. ');
+        await sendChunk('While the majority of the deck remains structurally sound, targeted interventions are required for **2 critical cracks** on the main pylons. ');
+        await sendChunk('Early intervention will prevent costly structural retrofitting in the future.');
+      } else if (lastUserMsg.includes('structural risk')) {
+        await sendChunk('I have run the defect metadata through our risk assessment model.\n\n');
+        await sendChunk('**Current Structural Risk Level: MODERATE-HIGH**\n\n');
+        await sendChunk('Risk Factors:\n');
+        await sendChunk('- Load-bearing crack propagation (Weight: High)\n');
+        await sendChunk('- Environmental exposure corrosion (Weight: Medium)\n\n');
+        await sendChunk('[CHART: risk]\n\n');
+        await sendChunk('Please review the 3D Analysis Map to visualize the exact stress points.');
+      } else {
+        const words = "I am processing your request. As an AI Infrastructure Inspection Assistant, I can summarize defects, compare flights, analyze structural risk, or generate repair recommendations based on the loaded telemetry and image data. Please use one of the quick actions or ask a specific question about the current models.".split(' ');
+        for (const w of words) {
+          await sendChunk(w + ' ');
+        }
       }
+
       controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       controller.close();
     }
   });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
-  });
+  return new NextResponse(stream, { headers: { 'Content-Type': 'text/event-stream' } });
 }

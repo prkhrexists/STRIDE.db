@@ -2,303 +2,455 @@
 
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
-import styles from './page.module.css';
-import CameraWizard, { CameraConfig } from '@/components/CameraWizard';
+import PageShell from '@/components/PageShell';
+import { ToastProvider, useToast } from '@/components/Toast';
+import { ArtificialHorizon, CompassWidget } from '@/components/FlightInstruments';
+import {
+  Activity, Battery, Gauge, Navigation, Radio, Camera,
+  Video, Image as ImageIcon, Zap, AlertTriangle, CheckCircle2,
+  Play, Square, RefreshCw, Shield, Cpu, Wifi, Crosshair, Map as MapIcon, RotateCcw, MonitorPlay
+} from 'lucide-react';
 
-const DEMO_DURATION = 90;
+// --- Types ---
+type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
+interface LogEntry { id: string; ts: string; level: LogLevel; source: string; message: string; }
+interface PiStatus { connected: boolean; cpu_pct?: number; ram_pct?: number; storage_used_gb?: number; storage_total_gb?: number; camera_connected?: boolean; temperature_c?: number; capture_active?: boolean; total_captured?: number; capture_elapsed_s?: number; }
+interface Telemetry { timestamp: number; altitude: number; groundspeed: number; airspeed: number; heading: number; roll: number; pitch: number; yaw: number; battery_pct: number; battery_voltage: number; battery_current: number; gps_sats: number; gps_fix: string; mode: string; armed: boolean; signal_strength: number; imu_status: string; phase: string; }
 
-function generateDemoTelemetry(timeSec: number) {
-  const battery_remaining = Math.max(0, 100 - (timeSec / DEMO_DURATION) * 100);
-  
-  let alt = 0, groundspeed = 0;
-  if (timeSec < 15) { alt = (timeSec / 15) * 45; groundspeed = 5; }
-  else if (timeSec < 75) { alt = 45 + Math.sin(timeSec * 2) * 0.5; groundspeed = 20; }
-  else { alt = 45 - ((timeSec - 75) / 15) * 45; alt = Math.max(0, alt); groundspeed = 2; }
-  
-  const heading = (timeSec * 5) % 360;
-
-  return {
-    SYS_STATUS: { battery_remaining: Math.round(battery_remaining) },
-    VFR_HUD: { airspeed: groundspeed, groundspeed, heading, alt },
-    HEARTBEAT: { custom_mode: timeSec < 15 ? 'AUTO' : 'LOITER' }
-  };
-}
-
-export default function UAVCastDashboard() {
-  const [telemetry, setTelemetry] = useState<any>(null);
-  const [cameraConfig, setCameraConfig] = useState<CameraConfig | null>(null);
-  const [isDemoMode, setIsDemoMode] = useState(false);
-  const [demoTime, setDemoTime] = useState(0);
-  const [isWizardOpen, setIsWizardOpen] = useState(false);
-  const [mediaMode, setMediaMode] = useState<'video' | 'photo'>('video');
-  
-  const requestRef = useRef<number>();
-  const previousTimeRef = useRef<number>();
-
-  useEffect(() => {
-    const savedCam = localStorage.getItem('aegis_picam_config');
-    if (savedCam) setCameraConfig(JSON.parse(savedCam));
-    const savedDemo = sessionStorage.getItem('demoTime') !== null;
-    setIsDemoMode(savedDemo);
-  }, []);
-
-  useEffect(() => {
-    if (isDemoMode) return;
-    const eventSource = new EventSource('/api/mavlink/stream');
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        setTelemetry((prev: any) => ({ ...prev, [data.type]: data }));
-      } catch (e) {}
-    };
-    return () => eventSource.close();
-  }, [isDemoMode]);
-
-  useEffect(() => {
-    if (!isDemoMode) return;
-    const animate = (time: number) => {
-      if (previousTimeRef.current !== undefined) {
-        const deltaTime = (time - previousTimeRef.current) / 1000;
-        setDemoTime((prev) => (prev + deltaTime) % DEMO_DURATION);
-      }
-      previousTimeRef.current = time;
-      requestRef.current = requestAnimationFrame(animate);
-    };
-    requestRef.current = requestAnimationFrame(animate);
-    return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
-  }, [isDemoMode]);
-
-  useEffect(() => {
-    if (isDemoMode) {
-      setTelemetry(generateDemoTelemetry(demoTime));
-    }
-  }, [demoTime, isDemoMode]);
-
-  const toggleDemo = () => {
-    if (isDemoMode) sessionStorage.removeItem('demoTime');
-    else sessionStorage.setItem('demoTime', '1');
-    setIsDemoMode(!isDemoMode);
-    setTelemetry(null);
-  };
-
-  const isConnected = !!telemetry?.VFR_HUD;
-  const alt = isConnected ? (telemetry?.VFR_HUD?.alt || 0) : null;
-  const bat = isConnected ? (telemetry?.SYS_STATUS?.battery_remaining || 0) : null;
-  const spd = isConnected ? (telemetry?.VFR_HUD?.groundspeed || 0) : null;
-  const mode = isConnected ? (telemetry?.HEARTBEAT?.custom_mode || 'DISARMED') : 'DISARMED';
-
-  const mockAgents = [
-    { id: 'Agent-01', task: 'Perimeter Scan', status: 'Active', color: '#10b981' },
-    { id: 'Agent-02', task: 'Thermal Imaging', status: 'Idle', color: '#f59e0b' },
-    { id: 'Agent-03', task: 'SSIM Baseline', status: 'Active', color: '#10b981' },
-    { id: 'Agent-04', task: 'Relay Node', status: 'Active', color: '#10b981' },
-    { id: 'Agent-05', task: 'Offline', status: 'Disconnected', color: '#ef4444' },
-  ];
+// --- Subcomponents ---
+function TelemetryPanel({ telemetry, onCommand }: { telemetry: Telemetry | null, onCommand: (cmd: string) => void }) {
+  const connected = !!telemetry;
+  const alt = telemetry?.altitude ?? 0;
+  const spd = telemetry?.groundspeed ?? 0;
+  const hdg = telemetry?.heading ?? 0;
+  const bat = telemetry?.battery_pct ?? 0;
+  const mode = telemetry?.mode ?? 'OFFLINE';
+  const batColor = bat > 40 ? 'var(--accent-green)' : bat > 20 ? 'var(--accent-amber)' : 'var(--accent-red)';
+  const armed = telemetry?.armed ?? false;
 
   return (
-    <div className={styles.gcsContainer}>
-      {isWizardOpen && (
-        <CameraWizard onClose={() => setIsWizardOpen(false)} onConnect={(config) => { setCameraConfig(config); setIsWizardOpen(false); }} />
-      )}
+    <div className="stride-card" style={{ display:'flex', flexDirection:'column', overflow:'hidden', height: '100%' }}>
+      <div className="card-header">
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <Activity size={13} color="var(--accent-blue)" />
+          <span className="card-header-title">Flight Telemetry</span>
+        </div>
+        <div className="badge" style={{ background: connected?'var(--accent-green-glow)':'var(--accent-red-glow)', color: connected?'var(--accent-green)':'var(--accent-red)', borderColor: connected?'rgba(34,197,94,0.3)':'rgba(239,68,68,0.3)' }}>
+          <div className={`status-dot ${connected?'status-online':'status-offline'}`} />
+          {connected ? 'LINK ACTIVE' : 'NO LINK'}
+        </div>
+      </div>
 
-      {/* LEFT SIDEBAR NAVIGATION */}
-      <nav className={styles.sidebar}>
-        <div className={styles.brand}>AEGIS <span>PRO</span></div>
-        
-        <div className={styles.backBtn}>
-          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-          Back
+      <div style={{ padding:14, flex:1, display:'flex', flexDirection:'column', gap:14, overflowY:'auto' }}>
+        {/* Instruments row */}
+        <div style={{ display:'flex', justifyContent:'space-around', alignItems:'center', paddingBottom:14, borderBottom:'1px solid var(--border-primary)' }}>
+          <div style={{ textAlign:'center' }}>
+            <ArtificialHorizon roll={telemetry?.roll ?? 0} pitch={telemetry?.pitch ?? 0} size={90} />
+            <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:6, fontWeight:600 }}>ATTITUDE</div>
+          </div>
+          <div style={{ textAlign:'center' }}>
+            <CompassWidget heading={telemetry?.heading ?? 0} size={90} />
+            <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:6, fontWeight:600 }}>HEADING</div>
+          </div>
         </div>
 
-        <div className={styles.navSection}>Operations</div>
-        <Link href="/" className={`${styles.navItem} ${styles.navActive}`}>
-          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-          Dashboard
-        </Link>
-        <Link href="/map" className={styles.navItem}>
-          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/></svg>
-          Flight Map
-        </Link>
-        <Link href="/search" className={styles.navItem}>
-          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          Search
-        </Link>
-        <Link href="/chat" className={styles.navItem}>
-          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          Chat
-        </Link>
-
-        <div className={styles.navSection}>Management</div>
-        <Link href="/drone" className={styles.navItem}>
-          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-          Drone
-        </Link>
-        <Link href="/files" className={styles.navItem}>
-          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-          Files
-        </Link>
-        <Link href="/settings" className={styles.navItem}>
-          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          Settings
-        </Link>
-        <div className={styles.navItem} onClick={toggleDemo}>
-          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          {isDemoMode ? 'Exit Demo' : 'Start Demo'}
-        </div>
-      </nav>
-
-      {/* MAIN DASHBOARD GRID */}
-      <main className={styles.dashboardGrid}>
-        
-        {/* CENTRAL PANEL: VISUALS (Top Left/Center span) */}
-        <div className={`${styles.panel} ${styles.visualsPanel}`}>
-          <div className={styles.camOverlays}>
-            <div className={styles.overlayBadge}>
-              <div className={styles.redDot}></div> HDR REC
+        {/* Primary Stats */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          {[
+            { label:'Altitude', value: `${alt.toFixed(1)} m`, color:'var(--accent-blue)' },
+            { label:'Speed', value: `${spd.toFixed(1)} m/s`, color:'var(--text-primary)' },
+            { label:'GPS', value: connected ? `${telemetry.gps_sats} Sats (${telemetry.gps_fix})` : '---', color: connected && telemetry.gps_sats > 8 ? 'var(--accent-green)' : 'var(--accent-amber)' },
+            { label:'Mode', value: mode, color:'var(--text-primary)' },
+            { label:'Signal', value: connected ? `${telemetry.signal_strength}%` : '---', color:'var(--accent-green)' },
+            { label:'IMU', value: telemetry?.imu_status ?? '---', color:'var(--accent-green)' },
+          ].map((s,i) => (
+            <div key={i} style={{ background:'var(--bg-elevated)', padding:'8px 12px', borderRadius:'var(--radius-sm)', border:'1px solid var(--border-primary)' }}>
+              <div style={{ fontSize:10, color:'var(--text-muted)', fontWeight:600, textTransform:'uppercase' }}>{s.label}</div>
+              <div style={{ fontSize:13, fontWeight:700, color:s.color, fontFamily:'var(--font-mono)', marginTop:2 }}>{s.value}</div>
             </div>
-            <div className={styles.overlayBadge}>Live Camera</div>
+          ))}
+        </div>
+
+        {/* Battery */}
+        <div>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6, alignItems:'center' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+              <Battery size={12} color={batColor} />
+              <span style={{ fontSize:11, color:'var(--text-secondary)', fontWeight:600 }}>Battery</span>
+            </div>
+            <span style={{ fontSize:12, color:'var(--text-muted)' }}>
+              {connected ? `${telemetry.battery_voltage.toFixed(1)}V · ${telemetry.battery_current.toFixed(1)}A` : ''}
+            </span>
+            <span style={{ fontSize:13, fontWeight:700, color: batColor, fontFamily:'var(--font-mono)' }}>{connected ? `${bat}%` : '---'}</span>
+          </div>
+          <div className="progress-track"><div className="progress-fill" style={{ width: `${bat}%`, background: batColor }} /></div>
+        </div>
+
+        {/* Action Buttons */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:'auto' }}>
+          <button className={`btn ${armed ? 'btn-danger' : 'btn-success'}`} onClick={() => onCommand(armed ? 'disarm' : 'arm')} disabled={!connected} style={{ justifyContent:'center' }}>
+            {armed ? 'Disarm' : 'Arm Drone'}
+          </button>
+          <button className="btn btn-primary" onClick={() => onCommand('takeoff')} disabled={!connected || !armed || telemetry?.phase !== 'ground'} style={{ justifyContent:'center' }}>
+            Takeoff
+          </button>
+          <button className="btn btn-secondary" onClick={() => onCommand('start_mission')} disabled={!connected || !armed} style={{ justifyContent:'center' }}>
+            <MapIcon size={12}/> Mission
+          </button>
+          <button className="btn btn-secondary" onClick={() => onCommand('rth')} disabled={!connected || !armed} style={{ justifyContent:'center' }}>
+            <RotateCcw size={12}/> RTH
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PiConnectionPanel({ status }: { status: PiStatus | null }) {
+  const connected = status?.connected;
+  return (
+    <div className="stride-card" style={{ display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <div className="card-header">
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <Cpu size={13} color="var(--accent-blue)" />
+          <span className="card-header-title">Pi Connection</span>
+        </div>
+        <div className={`status-dot ${connected?'status-online':'status-offline'}`} />
+      </div>
+      <div style={{ padding:14, display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+        {[
+          { label:'Status', value: connected ? 'ONLINE' : 'OFFLINE', color: connected ? 'var(--accent-green)' : 'var(--accent-red)' },
+          { label:'Camera', value: status?.camera_connected ? 'CONNECTED' : 'NOT DETECTED', color: status?.camera_connected ? 'var(--accent-green)' : 'var(--accent-red)' },
+          { label:'CPU Temp', value: connected ? `${status?.temperature_c?.toFixed(1)}°C` : '---', color: 'var(--text-primary)' },
+          { label:'CPU Load', value: connected ? `${status?.cpu_pct?.toFixed(1)}%` : '---', color: 'var(--text-primary)' },
+          { label:'RAM Used', value: connected ? `${status?.ram_used_mb}MB / ${status?.ram_total_mb}MB` : '---', color: 'var(--text-primary)' },
+          { label:'Storage', value: connected ? `${status?.storage_used_gb}GB / ${status?.storage_total_gb}GB` : '---', color: 'var(--text-primary)' },
+        ].map((s,i) => (
+          <div key={i} style={{ padding:'6px 0', borderBottom:'1px solid var(--border-primary)' }}>
+            <div style={{ fontSize:10, color:'var(--text-muted)', fontWeight:600, textTransform:'uppercase', marginBottom:2 }}>{s.label}</div>
+            <div style={{ fontSize:12, fontWeight:600, color: s.color, fontFamily:'var(--font-mono)' }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ActivityLogPanel({ logs }: { logs: LogEntry[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [logs]);
+
+  const levelColor = (l: LogLevel) => l==='ERROR'?'var(--accent-red)':l==='WARN'?'var(--accent-amber)':l==='SUCCESS'?'var(--accent-green)':'var(--accent-blue)';
+
+  return (
+    <div className="stride-card" style={{ display:'flex', flexDirection:'column', overflow:'hidden', flex:1 }}>
+      <div className="card-header">
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <Activity size={13} color="var(--accent-blue)" />
+          <span className="card-header-title">Activity Log</span>
+        </div>
+      </div>
+      <div ref={scrollRef} style={{ flex:1, overflowY:'auto', padding:'8px 12px', display:'flex', flexDirection:'column', gap:4, background:'var(--bg-secondary)' }}>
+        {logs.map((l, i) => (
+          <div key={i} style={{ display:'flex', gap:10, fontSize:11, fontFamily:'var(--font-mono)', padding:'4px 0', borderBottom: i<logs.length-1?'1px dashed var(--border-primary)':'none' }}>
+            <span style={{ color:'var(--text-muted)' }}>{new Date(l.ts).toLocaleTimeString([], {hour12:false})}</span>
+            <span style={{ color:levelColor(l.level), width:55, flexShrink:0 }}>[{l.level}]</span>
+            <span style={{ color:'var(--text-secondary)', width:60, flexShrink:0 }}>{l.source}</span>
+            <span style={{ color:'var(--text-primary)', flex:1 }}>{l.message}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MediaControls({ status, onAction }: { status: PiStatus | null, onAction: (a:string, p?:any)=>void }) {
+  const [interval, setInterval] = useState('5');
+  const [res, setRes] = useState('1080p');
+  const active = status?.capture_active ?? false;
+  const count = status?.total_captured ?? 0;
+  const elapsed = status?.capture_elapsed_s ?? 0;
+
+  const formatTime = (s: number) => {
+    const m = Math.floor(s/60);
+    const secs = s%60;
+    return `${m.toString().padStart(2,'0')}:${secs.toString().padStart(2,'0')}`;
+  };
+
+  return (
+    <div className="stride-card" style={{ display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <div className="card-header">
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <Camera size={13} color="var(--accent-blue)" />
+          <span className="card-header-title">Media & Capture</span>
+        </div>
+        {active && <div className="badge badge-red"><div className="status-dot status-offline" style={{animation:'pulse-dot 1s infinite'}}/> REC {formatTime(elapsed)}</div>}
+      </div>
+      <div style={{ padding:14, display:'flex', flexDirection:'column', gap:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          <div>
+            <label style={{ fontSize:10, color:'var(--text-muted)', fontWeight:600, textTransform:'uppercase' }}>Interval</label>
+            <select className="stride-select" value={interval} onChange={e=>setInterval(e.target.value)} disabled={active}>
+              <option value="1">1s</option><option value="3">3s</option><option value="5">5s</option><option value="10">10s</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:10, color:'var(--text-muted)', fontWeight:600, textTransform:'uppercase' }}>Resolution</label>
+            <select className="stride-select" value={res} onChange={e=>setRes(e.target.value)} disabled={active}>
+              <option value="720p">1280x720</option><option value="1080p">1920x1080</option><option value="4k">3840x2160</option>
+            </select>
+          </div>
+        </div>
+        
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderTop:'1px solid var(--border-primary)' }}>
+          <span style={{ fontSize:11, color:'var(--text-secondary)' }}>Images Captured</span>
+          <span style={{ fontSize:14, fontWeight:700, color:'var(--text-primary)', fontFamily:'var(--font-mono)' }}>{count}</span>
+        </div>
+
+        <div style={{ display:'flex', gap:8 }}>
+          <button className={`btn ${active ? 'btn-danger' : 'btn-success'}`} style={{ flex:1, justifyContent:'center' }} onClick={() => onAction(active ? 'stop' : 'start', { interval: parseInt(interval) })}>
+            {active ? <><Square size={12}/> Stop Capture</> : <><Play size={12}/> Start Capture</>}
+          </button>
+          <button className="btn btn-secondary" onClick={() => onAction('snapshot')} disabled={active} title="Take single snapshot">
+            <Camera size={14} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const DEMO_STEPS = [
+  { id: 'connect', label: '1. Establishing Drone Connection', duration: 2000, log: 'Initiating MAVLink handshake...' },
+  { id: 'telemetry', label: '2. Telemetry Synchronization', duration: 1500, log: 'Receiving flight parameters. Altitude locked.' },
+  { id: 'camera', label: '3. Camera Stream Activation', duration: 2000, log: 'Video websocket connected at 1080p/30fps.' },
+  { id: 'capture', label: '4. Autonomous Image Capture', duration: 4000, log: 'Executing waypoint mission. 24 frames captured.' },
+  { id: 'upload', label: '5. Encrypted Flight Upload', duration: 2500, log: 'Syncing 1.2GB flight data to Aegis Cloud...' },
+  { id: 'detect', label: '6. AI Defect Detection', duration: 3000, log: 'Running computer vision models. 14 anomalies detected.' },
+  { id: 'analyze', label: '7. Structural Health Analysis', duration: 2500, log: 'Calculating structural degradation... Score: 78%' },
+  { id: 'reconstruct', label: '8. 3D Model Reconstruction', duration: 3500, log: 'Generating point cloud and mesh from flight images.' },
+  { id: 'report', label: '9. AI Report Generation', duration: 2000, log: 'Compiling executive summary and priority action list.' },
+  { id: 'export', label: '10. PDF Export Preparation', duration: 1500, log: 'Finalizing formatting. PDF ready for download.' },
+];
+
+function CinematicDemoOverlay({ stepIndex, onCancel }: { stepIndex: number, onCancel: () => void }) {
+  if (stepIndex < 0 || stepIndex >= DEMO_STEPS.length) return null;
+  const step = DEMO_STEPS[stepIndex];
+  const progress = ((stepIndex + 1) / DEMO_STEPS.length) * 100;
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, background: 'rgba(3, 5, 9, 0.85)', backdropFilter: 'blur(16px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundImage: 'linear-gradient(to bottom, transparent 50%, rgba(0, 0, 0, 0.25) 50%)', backgroundSize: '100% 4px' }}>
+      <div className="stride-card" style={{ width: 540, padding: 40, border: '1px solid rgba(59, 130, 246, 0.3)', boxShadow: '0 0 80px rgba(59, 130, 246, 0.15), inset 0 0 20px rgba(59, 130, 246, 0.05)', background: 'var(--bg-card)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+          <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--accent-blue)', animation: 'pulse-dot 1s infinite' }} />
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'white', letterSpacing: '0.05em' }}>STRIDE ENTERPRISE DEMO</span>
+        </div>
+        
+        <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-cyan)', marginBottom: 8 }}>{step.label}</div>
+        <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 32, fontFamily: 'var(--font-mono)' }}>{step.log}</div>
+
+        <div style={{ height: 6, background: 'var(--bg-primary)', borderRadius: 4, overflow: 'hidden', marginBottom: 12 }}>
+          <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg, var(--accent-blue), var(--accent-cyan))', transition: 'width 0.5s ease' }} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' }}>
+          <span>Sequence {stepIndex + 1} of {DEMO_STEPS.length}</span>
+          <span>{Math.round(progress)}% Complete</span>
+        </div>
+
+        <button className="btn btn-ghost" style={{ width: '100%', justifyContent: 'center', marginTop: 32, color: 'var(--text-muted)' }} onClick={onCancel}>
+          Cancel Demo Sequence
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// --- Main Content ---
+function DashboardContent() {
+  const { success, error, info } = useToast();
+  const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [piStatus, setPiStatus] = useState<PiStatus | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [camUrl, setCamUrl] = useState('');
+  
+  // Cinematic Demo State
+  const [demoStep, setDemoStep] = useState(-1);
+
+  // Setup Streams
+  useEffect(() => {
+    const telEs = new EventSource(`/api/telemetry/stream?demo=${isDemoMode?'1':'0'}`);
+    telEs.onmessage = (e) => { try { setTelemetry(JSON.parse(e.data)); } catch {} };
+    
+    const logEs = new EventSource('/api/logs/stream');
+    logEs.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.type === 'backfill') setLogs(d.entries);
+        else if (d.type === 'entry') setLogs(p => [...p, d.entry].slice(-100));
+      } catch {}
+    };
+
+    const piPoll = setInterval(async () => {
+      try {
+        const res = await fetch('/api/pi/status');
+        if (res.ok) {
+          const data = await res.json();
+          setPiStatus(data);
+          if (data.connected && !camUrl) {
+            setCamUrl(data.simulated ? '/cracks/04168eeebk3f94229020b7d905d28c43-1-_JPG.rf.b7456ec9aed620a184c515508604468c.jpg' : `${process.env.NEXT_PUBLIC_PI_URL || 'http://192.168.1.100:5001'}/stream`);
+          } else if (!data.connected) {
+            setCamUrl('');
+          }
+        }
+      } catch {
+        setPiStatus(null);
+        setCamUrl('');
+      }
+    }, 1000);
+
+    return () => { telEs.close(); logEs.close(); clearInterval(piPoll); };
+  }, [isDemoMode]);
+
+  // Demo Orchestration Engine
+  useEffect(() => {
+    if (isDemoMode && demoStep === -1) {
+      setDemoStep(0); // Start demo
+    } else if (!isDemoMode && demoStep !== -1) {
+      setDemoStep(-1); // Cancel demo
+    }
+  }, [isDemoMode]);
+
+  useEffect(() => {
+    if (demoStep >= 0 && demoStep < DEMO_STEPS.length) {
+      const step = DEMO_STEPS[demoStep];
+      
+      // Inject Log & Toast
+      info(step.label);
+      setLogs(p => [...p, { id: Math.random().toString(), ts: new Date().toISOString(), level: 'INFO', source: 'DEMO_SEQ', message: step.log }]);
+
+      // Visual Side Effects per step
+      if (step.id === 'camera') setCamUrl('/cracks/04168eeebk3f94229020b7d905d28c43-1-_JPG.rf.b7456ec9aed620a184c515508604468c.jpg');
+      if (step.id === 'capture') setPiStatus(p => p ? { ...p, capture_active: true } : null);
+      if (step.id === 'upload') setPiStatus(p => p ? { ...p, capture_active: false, total_captured: 24 } : null);
+      if (step.id === 'detect') setLogs(p => [...p, { id: Math.random().toString(), ts: new Date().toISOString(), level: 'WARN', source: 'AI_CORE', message: 'Critical defect (Spalling) found on NW Facade.' }]);
+
+      const timer = setTimeout(() => {
+        setDemoStep(demoStep + 1);
+      }, step.duration);
+      return () => clearTimeout(timer);
+    } else if (demoStep === DEMO_STEPS.length) {
+      success('Cinematic Demo Complete!');
+      setDemoStep(-1);
+      setIsDemoMode(false);
+    }
+  }, [demoStep]);
+
+  const handleDroneCmd = async (action: string) => {
+    try {
+      const res = await fetch('/api/drone/command', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action}) });
+      const data = await res.json();
+      if (data.success) success(data.message);
+      else error(data.message);
+    } catch { error('Failed to send command to drone'); }
+  };
+
+  const handlePiCmd = async (action: string, payload?: any) => {
+    try {
+      const res = await fetch('/api/pi/status', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, ...payload}) });
+      const data = await res.json();
+      if (data.success) info(data.message);
+      else error(data.message);
+    } catch { error('Failed to send command to Pi'); }
+  };
+
+  return (
+    <PageShell title="Flight Operations" subtitle="STRIDE GCS Dashboard" isDemoMode={isDemoMode} onToggleDemo={() => setIsDemoMode(!isDemoMode)} systemStatus={telemetry ? 'online' : 'offline'} noPadding>
+      <div style={{ display:'grid', gridTemplateColumns:'300px 1fr 340px', gap:14, padding:14, height:'100%', overflow:'hidden', position:'relative' }}>
+        
+        <CinematicDemoOverlay stepIndex={demoStep} onCancel={() => setIsDemoMode(false)} />
+
+        {/* LEFT COLUMN: Media & Logs */}
+        <div style={{ display:'flex', flexDirection:'column', gap:14, height:'100%', overflow:'hidden' }}>
+          <MediaControls status={piStatus} onAction={handlePiCmd} />
+          <PiConnectionPanel status={piStatus} />
+          <ActivityLogPanel logs={logs} />
+        </div>
+
+        {/* CENTER COLUMN: Camera Feed */}
+        <div className="stride-card" style={{ display:'flex', flexDirection:'column', overflow:'hidden', position:'relative', background:'#000' }}>
+          {/* Top Overlays */}
+          <div style={{ position:'absolute', top:14, left:14, zIndex:10, display:'flex', gap:8 }}>
+            <div className="glass badge" style={{ padding:'5px 12px' }}>
+              <div style={{ width:7, height:7, borderRadius:'50%', background: camUrl ? 'var(--accent-red)' : 'var(--text-muted)', animation: camUrl ? 'pulse-dot 1s infinite' : 'none' }} />
+              <span style={{ fontSize:11, fontWeight:700 }}>{camUrl ? 'LIVE FEED' : 'OFFLINE'}</span>
+            </div>
+            {camUrl && <div className="glass badge"><MonitorPlay size={11} color="var(--accent-green)"/> 30 FPS</div>}
+          </div>
+
+          {/* Crosshair Overlay */}
+          {camUrl && (
+            <div style={{ position:'absolute', inset:0, zIndex:5, pointerEvents:'none', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <Crosshair size={40} color="rgba(255,255,255,0.3)" strokeWidth={1} />
+            </div>
+          )}
+
+          {/* Feed Content */}
+          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', position:'relative', overflow:'hidden' }}>
+            {camUrl ? (
+              <img src={camUrl} alt="Live Feed" style={{ width:'100%', height:'100%', objectFit:'cover' }} onError={() => setCamUrl('')} />
+            ) : (
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, color:'var(--text-muted)' }}>
+                {/* Animated offline grid */}
+                <div style={{ position:'absolute', inset:0, backgroundSize:'40px 40px', backgroundImage:'linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.05) 1px, transparent 1px)', pointerEvents:'none' }} />
+                
+                <div style={{ position:'relative', width:64, height:64, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  <div style={{ position:'absolute', inset:0, border:'2px dashed var(--border-active)', borderRadius:'50%', animation:'spin 10s linear infinite' }} />
+                  <Camera size={24} color="var(--text-muted)" />
+                </div>
+                <div style={{ textAlign:'center', zIndex:1 }}>
+                  <div style={{ fontSize:16, fontWeight:600, color:'var(--text-secondary)' }}>Awaiting Pi Stream</div>
+                  <div style={{ fontSize:12, marginTop:4 }}>Camera feed is currently offline or disconnected</div>
+                </div>
+              </div>
+            )}
           </div>
           
-          {cameraConfig ? (
-            <img src={`/api/picam/stream?ip=${cameraConfig?.ip}&port=${cameraConfig?.port}`} className={styles.cameraFeed} alt="Feed" />
-          ) : (
-            <div className={styles.testPattern}>
-              <div className={styles.testRow}>
-                <div className={styles.testColor} style={{background: '#e5e5e5'}}></div>
-                <div className={styles.testColor} style={{background: '#fde047'}}></div>
-                <div className={styles.testColor} style={{background: '#67e8f9'}}></div>
-                <div className={styles.testColor} style={{background: '#86efac'}}></div>
-                <div className={styles.testColor} style={{background: '#f9a8d4'}}></div>
-                <div className={styles.testColor} style={{background: '#ef4444'}}></div>
-                <div className={styles.testColor} style={{background: '#3b82f6'}}></div>
-              </div>
-              <div className={styles.testRow} style={{flex: 0.2}}>
-                <div className={styles.testColor} style={{background: '#1d4ed8'}}></div>
-                <div className={styles.testColor} style={{background: '#000000'}}></div>
-                <div className={styles.testColor} style={{background: '#a855f7'}}></div>
-                <div className={styles.testColor} style={{background: '#262626'}}></div>
-                <div className={styles.testColor} style={{background: '#0a0a0a'}}></div>
-                <div className={styles.testColor} style={{background: '#525252'}}></div>
-                <div className={styles.testColor} style={{background: '#737373'}}></div>
-              </div>
+          {/* Bottom HUD */}
+          {camUrl && telemetry && (
+            <div style={{ position:'absolute', bottom:14, left:14, right:14, zIndex:10, display:'flex', gap:10, justifyContent:'center' }}>
+              {[
+                { label:'ALT', value: `${telemetry.altitude.toFixed(1)}m` },
+                { label:'SPD', value: `${telemetry.groundspeed.toFixed(1)}m/s` },
+                { label:'HDG', value: `${Math.round(telemetry.heading)}°` },
+                { label:'BAT', value: `${telemetry.battery_pct}%` },
+              ].map(s => (
+                <div key={s.label} className="glass" style={{ padding:'4px 12px', borderRadius:'var(--radius-sm)', display:'flex', alignItems:'center', gap:6 }}>
+                  <span style={{ fontSize:10, color:'rgba(255,255,255,0.7)', fontWeight:600 }}>{s.label}</span>
+                  <span style={{ fontSize:12, fontWeight:700, color:'white', fontFamily:'var(--font-mono)' }}>{s.value}</span>
+                </div>
+              ))}
             </div>
           )}
         </div>
 
-        {/* TOP-RIGHT: TELEMETRY (Spans full right side) */}
-        <div className={`${styles.panel} ${styles.telemetryPanel}`}>
-          <div className={styles.panelHeader}>
-            Telemetry
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button 
-                onClick={toggleDemo} 
-                style={{ padding: '0.25rem 0.5rem', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer' }}
-              >
-                {isDemoMode ? 'Stop Demo' : 'Run Demo'}
-              </button>
-              <Link 
-                href="/settings#drone" 
-                style={{ padding: '0.25rem 0.5rem', backgroundColor: '#0d9488', color: 'white', border: 'none', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer', textDecoration: 'none' }}
-              >
-                Connect Drone
-              </Link>
-            </div>
-          </div>
-          <div className={styles.telemetryContent}>
-            <div>
-              <div className={styles.droneTitle}>DHMR-32000</div>
-              <div style={{color: '#a3a3a3', fontSize: '0.75rem'}}>{isConnected ? 'Connected ? Latency 12ms' : 'Disconnected'}</div>
-            </div>
-            
-            <div className={styles.statusBars}>
-              <div className={styles.statusGroup}>
-                <div className={styles.statusHeader}>
-                  <span>Altitude</span>
-                  <span className={styles.statusValue}>{alt !== null ? `${alt.toFixed(1)} M` : '--'}</span>
-                </div>
-                <div className={styles.progressBar}><div className={styles.progressFill} style={{width: alt !== null ? `${Math.min(alt / 120 * 100, 100)}%` : '0%'}}></div></div>
-              </div>
-
-              <div className={styles.statusGroup}>
-                <div className={styles.statusHeader}>
-                  <span>Battery Status</span>
-                  <span className={styles.statusValue} style={{color: bat === null ? '#a3a3a3' : (bat === 0 ? '#ef4444' : '#3b82f6')}}>{bat !== null ? `${bat}%` : '--'}</span>
-                </div>
-                <div className={styles.progressBar}>
-                  <div className={styles.progressFill} style={{width: bat !== null ? `${bat}%` : '0%', background: bat === null ? 'transparent' : (bat === 0 ? '#ef4444' : '#3b82f6')}}></div>
-                </div>
-              </div>
-            </div>
-
-            <div className={styles.dataGrid}>
-              <div className={styles.dataRow}>
-                <span className={styles.dataLabel}>Speed</span>
-                <span className={styles.dataVal}>{spd !== null ? `${spd.toFixed(1)} Km/h` : '--'}</span>
-              </div>
-              <div className={styles.dataRow}>
-                <span className={styles.dataLabel}>Zone</span>
-                <span className={`${styles.dataVal} ${mode !== 'DISARMED' ? styles.active : ''}`}>{isConnected ? (mode !== 'DISARMED' ? 'Green' : 'Safe') : '--'}</span>
-              </div>
-              <div className={styles.dataRow}>
-                <span className={styles.dataLabel}>Distance</span>
-                <span className={styles.dataVal}>{alt !== null ? `${(alt * 1.5).toFixed(1)} Km` : '--'}</span>
-              </div>
-              <div className={styles.dataRow}>
-                <span className={styles.dataLabel}>ISO</span>
-                <span className={styles.dataVal}>{isConnected ? '6000' : '--'}</span>
-              </div>
-              <div className={styles.dataRow}>
-                <span className={styles.dataLabel}>Shutter</span>
-                <span className={styles.dataVal}>{isConnected ? '1/50.0' : '--'}</span>
-              </div>
-            </div>
-          </div>
+        {/* RIGHT COLUMN: Telemetry */}
+        <div style={{ height:'100%', overflow:'hidden' }}>
+          <TelemetryPanel telemetry={telemetry} onCommand={handleDroneCmd} />
         </div>
 
-        {/* BOTTOM-LEFT: MEDIA CONTROLS */}
-        <div className={`${styles.panel} ${styles.mediaPanel}`}>
-          <div className={styles.panelHeader}>Media Controls</div>
-          <div className={styles.mediaContent}>
-            <div className={styles.mediaToggle}>
-              <div className={`${styles.toggleBtn} ${mediaMode === 'video' ? styles.active : ''}`} onClick={() => setMediaMode('video')}>Video</div>
-              <div className={`${styles.toggleBtn} ${mediaMode === 'photo' ? styles.active : ''}`} onClick={() => setMediaMode('photo')}>Photo</div>
-            </div>
-            
-            <div className={styles.dataGrid} style={{marginTop: 0}}>
-              <div className={styles.dataRow}>
-                <span className={styles.dataLabel}>Frame</span>
-                <span className={styles.dataVal}>1920:1080</span>
-              </div>
-              <div className={styles.dataRow}>
-                <span className={styles.dataLabel}>Format</span>
-                <span className={styles.dataVal}>MP4</span>
-              </div>
-            </div>
-          </div>
-        </div>
+      </div>
+    </PageShell>
+  );
+}
 
-        {/* BOTTOM-CENTER: MULTI-AGENT MANAGEMENT */}
-        <div className={`${styles.panel} ${styles.agentsPanel}`}>
-          <div className={styles.panelHeader}>Multi-Agent Management</div>
-          <div className={styles.agentList}>
-            {mockAgents.map((agent) => (
-              <div key={agent.id} className={styles.agentRow}>
-                <div className={styles.agentInfo}>
-                  <div className={styles.agentIcon} style={{backgroundColor: agent.color}}></div>
-                  <div style={{display: 'flex', flexDirection: 'column'}}>
-                    <span className={styles.agentName}>{agent.id}</span>
-                    <span className={styles.agentTask}>{agent.task}</span>
-                  </div>
-                </div>
-                <div className={styles.agentStatus} style={{color: agent.color}}>
-                  {agent.status}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-      </main>
-    </div>
+export default function HomePage() {
+  return (
+    <ToastProvider>
+      <DashboardContent />
+    </ToastProvider>
   );
 }
