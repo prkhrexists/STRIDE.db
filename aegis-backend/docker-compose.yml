@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  fastapi:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - ODM_URL=http://webodm:3000
+      - SARVAM_API_KEY=${SARVAM_API_KEY}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  webodm:
+    image: opendronemap/nodeodm
+    ports:
+      - "3000:3000"

@@ -1,0 +1,46 @@
+{
+  "name": "aegis-control",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "dev:gcs": "cross-env MAV_CONNECTION=udp next dev",
+    "test:mavlink": "node scripts/test-mavlink-connection.js",
+    "test:picam": "node scripts/test-picam-stream.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
+    "@types/three": "^0.184.1",
+    "cross-env": "^10.1.0",
+    "html2canvas": "^1.4.1",
+    "http-proxy-middleware": "^4.0.0",
+    "jimp": "^1.6.1",
+    "jspdf": "^4.2.1",
+    "next": "14.2.35",
+    "node-abort-controller": "^3.1.1",
+    "node-mavlink": "^2.3.0",
+    "onnxruntime-node": "^1.26.0",
+    "openai": "^6.37.0",
+    "pdfkit": "^0.18.0",
+    "piexifjs": "^1.0.6",
+    "react": "^18",
+    "react-dom": "^18",
+    "sharp": "^0.34.5",
+    "ssim.js": "^3.5.0",
+    "three": "^0.184.0",
+    "ws": "^8.20.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/pdfkit": "^0.17.6",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/ws": "^8.18.1",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.35",
+    "typescript": "^5"
+  }
+}

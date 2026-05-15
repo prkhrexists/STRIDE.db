@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+websockets
+pymavlink
+openai
+redis
+scikit-image
+opencv-python-headless
+numpy
+reportlab
+staticmap
+open3d
+python-multipart

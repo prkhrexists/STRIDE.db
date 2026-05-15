@@ -1,0 +1,376 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+.gcsContainer {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  display: flex;
+  background-color: #0a0a0a; /* True Dark */
+  color: #ffffff;
+  font-family: 'Inter', Roboto, Arial, sans-serif;
+}
+
+/* SIDEBAR NAVIGATION */
+.sidebar {
+  width: 240px;
+  background-color: #0a0a0a;
+  border-right: 1px solid #262626;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 1rem;
+  flex-shrink: 0;
+}
+
+.brand {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 2rem;
+  padding-left: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.brand span {
+  color: #ef4444; /* Pro accent */
+}
+
+.backBtn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #a3a3a3;
+  font-size: 0.875rem;
+  padding: 0.5rem;
+  margin-bottom: 1rem;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.backBtn:hover {
+  color: #ffffff;
+}
+
+.navSection {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: #525252;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  padding-left: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.5rem;
+  border-radius: 6px;
+  color: #a3a3a3;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-decoration: none;
+}
+
+.navItem:hover {
+  background-color: #141414;
+  color: #ffffff;
+}
+
+.navActive {
+  background-color: #141414;
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+/* MAIN DASHBOARD GRID */
+.dashboardGrid {
+  flex: 1;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 340px;
+  grid-template-rows: 2fr 1fr;
+  gap: 16px;
+  height: 100vh;
+  box-sizing: border-box;
+}
+
+/* COMPONENT PANELS */
+.panel {
+  background-color: #141414;
+  border: 1px solid #262626;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+}
+
+.panelHeader {
+  background-color: #1a1a1a;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #e5e5e5;
+  border-bottom: 1px solid #262626;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* CENTRAL PANEL (CAMERA FEED) */
+.visualsPanel {
+  grid-column: 1 / 3;
+  grid-row: 1 / 2;
+  background-color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cameraFeed {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.testPattern {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.testRow {
+  display: flex;
+  flex: 1;
+}
+.testColor {
+  flex: 1;
+}
+
+.camOverlays {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 10;
+}
+
+.overlayBadge {
+  background: rgba(0,0,0,0.8);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #262626;
+}
+
+.redDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+/* TOP-RIGHT (TELEMETRY) */
+.telemetryPanel {
+  grid-column: 3 / 4;
+  grid-row: 1 / 3; /* Span full height on right */
+  display: flex;
+  flex-direction: column;
+}
+
+.telemetryContent {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow-y: auto;
+}
+
+.droneTitle {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 0.5rem;
+}
+
+.statusBars {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.statusGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.statusHeader {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: #a3a3a3;
+  font-weight: 500;
+}
+
+.statusValue {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.progressBar {
+  width: 100%;
+  height: 6px;
+  background: #262626;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: #3b82f6;
+  transition: width 0.3s;
+}
+
+.dataGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.dataRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #1a1a1a;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  border: 1px solid #262626;
+}
+
+.dataLabel {
+  color: #a3a3a3;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.dataVal {
+  color: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.dataVal.active {
+  color: #3b82f6;
+}
+
+/* BOTTOM-LEFT (MEDIA CONTROLS) */
+.mediaPanel {
+  grid-column: 1 / 2;
+  grid-row: 2 / 3;
+}
+
+.mediaContent {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.mediaToggle {
+  display: flex;
+  background: #1a1a1a;
+  border-radius: 8px;
+  padding: 4px;
+  border: 1px solid #262626;
+}
+
+.toggleBtn {
+  flex: 1;
+  padding: 0.5rem 0;
+  border-radius: 6px;
+  color: #a3a3a3;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.toggleBtn.active {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+/* BOTTOM-CENTER (MULTI-AGENT) */
+.agentsPanel {
+  grid-column: 2 / 3;
+  grid-row: 2 / 3;
+}
+
+.agentList {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.agentRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background-color: #1a1a1a;
+  border-radius: 8px;
+  border: 1px solid #262626;
+  transition: border-color 0.2s;
+}
+
+.agentRow:hover {
+  border-color: #3b82f6;
+}
+
+.agentInfo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.agentIcon {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.agentName {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #e5e5e5;
+}
+
+.agentTask {
+  font-size: 0.75rem;
+  color: #737373;
+}
+
+.agentStatus {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #10b981;
+}
