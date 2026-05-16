@@ -1,0 +1,10 @@
+{
+  "configured": false,
+  "piIp": "192.168.1.100",
+  "sshPort": "22",
+  "streamPort": "5001",
+  "telemetryPort": "14550",
+  "streamEndpoint": "/stream/video.mjpeg",
+  "authKey": "",
+  "captureInterval": 5
+}

@@ -1,32 +1,49 @@
-import { NextResponse } from 'next/server';
-import fs from 'fs';
+import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
+import fs from 'fs/promises';
+import { exec } from 'child_process';
+import util from 'util';
 
-export async function POST(req: Request) {
+const execAsync = util.promisify(exec);
+
+export const dynamic = 'force-dynamic';
+
+export async function POST(req: NextRequest) {
   try {
-    const { imagePath, flightId, frameId } = await req.json();
+    const formData = await req.formData();
+    const file = formData.get('file') as File;
+    const flightId = formData.get('flightId') as string || 'live';
+    const frameIndex = formData.get('frameIndex') as string || Date.now().toString();
 
-    const resultPath = path.join(process.cwd(), 'data', 'flights', flightId, 'analysis');
-    fs.mkdirSync(resultPath, { recursive: true });
+    if (!file) {
+      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    }
 
-    // Mocking the analysis for now (fallback to basic JSON structure if ONNX fails)
-    const analysis = {
-      overallCondition: "DEFECT",
-      defects: [
-        {
-          type: "crack",
-          severity: "high",
-          confidence: 0.92,
-          bbox: { x: 0.2, y: 0.3, w: 0.1, h: 0.4 },
-          description: "Large vertical crack"
-        }
-      ]
-    };
+    const buffer = Buffer.from(await file.arrayBuffer());
+    
+    // Create directory if it doesn't exist
+    const outputDir = path.join(process.cwd(), 'public', 'data', 'flights', flightId, 'frames');
+    await fs.mkdir(outputDir, { recursive: true });
+    
+    // Save the raw frame
+    const filename = `frame-${frameIndex}.jpg`;
+    const filepath = path.join(outputDir, filename);
+    await fs.writeFile(filepath, buffer);
 
-    fs.writeFileSync(path.join(resultPath, `${frameId}.json`), JSON.stringify(analysis, null, 2));
+    // Construct relative path for python analyzer
+    const relFilepath = `public/data/flights/${flightId}/frames/${filename}`;
 
-    return NextResponse.json(analysis);
-  } catch (error) {
-    return NextResponse.json({ error: 'Analysis failed' }, { status: 500 });
+    // Call analyzer
+    const cmd = `python server/analyzer.py --source file --filepath "${relFilepath}" --flightId "${flightId}" --frameIndex "${frameIndex}"`;
+    const { stdout, stderr } = await execAsync(cmd);
+    
+    // Parse python output robustly
+    const jsonStr = stdout.substring(stdout.indexOf('{'));
+    const result = JSON.parse(jsonStr);
+
+    return NextResponse.json(result);
+  } catch (error: any) {
+    console.error('Frame analysis error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

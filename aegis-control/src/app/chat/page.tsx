@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import PageShell from '@/components/PageShell';
 import { ToastProvider, useToast } from '@/components/Toast';
 import { useRouter } from 'next/navigation';
-import { Send, Trash2, FileText, Brain, RefreshCw, Zap, Download, ChevronDown, BarChart2, PieChart as PieChartIcon, Box } from 'lucide-react';
+import { Send, Trash2, FileText, Brain, RefreshCw, Zap, Download, ChevronDown, BarChart2, PieChart as PieChartIcon, Box, AlertTriangle } from 'lucide-react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface Message { role: 'user' | 'assistant'; content: string; }
@@ -158,7 +158,15 @@ function ChatContent() {
   const [healthStatus, setHealthStatus] = useState<'checking'|'online'|'offline'>('online');
   const [showReportGen, setShowReportGen] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [stats, setStats] = useState({ numFlights: 3, numDefects: 14 });
   const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetch('/api/ai-analyst')
+      .then(r => r.json())
+      .then(d => { if(d.numFlights) setStats(d); })
+      .catch(()=>{});
+  }, []);
 
   useEffect(() => {
     const saved = localStorage.getItem('stride_chat_v2');
@@ -180,7 +188,7 @@ function ChatContent() {
     setIsStreaming(true);
 
     try {
-      const res = await fetch('/api/inspector/chat', {
+      const res = await fetch('/api/ai-analyst', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ messages:newMsgs })
       });
@@ -226,8 +234,136 @@ function ChatContent() {
     }
   };
 
-  const renderContent = (text: string) => {
-    // Basic Markdown + Custom Tags
+  const renderContent = (text: string, isStreaming: boolean) => {
+    // Attempt to parse JSON if it looks like a structured response
+    if (text.trim().startsWith('{')) {
+      try {
+        const obj = JSON.parse(text);
+        if (obj.type === 'defect_summary') {
+          return (
+            <div style={{ marginTop: 12, marginBottom: 12, background: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-primary)' }}>
+              <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-primary)', fontWeight: 700, fontSize: 13, background: 'var(--bg-elevated)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Box size={14} color="var(--accent-blue)" /> Critical Defect Summary
+              </div>
+              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', textAlign: 'left' }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-primary)', color: 'var(--text-muted)' }}>
+                    <th style={{ padding: '8px 12px', fontWeight: 600 }}>ID</th>
+                    <th style={{ padding: '8px 12px', fontWeight: 600 }}>Type</th>
+                    <th style={{ padding: '8px 12px', fontWeight: 600 }}>Location</th>
+                    <th style={{ padding: '8px 12px', fontWeight: 600 }}>Confidence</th>
+                    <th style={{ padding: '8px 12px', fontWeight: 600 }}>Severity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {obj.data.map((d: any, i: number) => (
+                    <tr key={i} style={{ borderBottom: i === obj.data.length - 1 ? 'none' : '1px solid var(--border-primary)' }}>
+                      <td style={{ padding: '8px 12px', fontFamily: 'var(--font-mono)' }}>{d.id || d.defect_id}</td>
+                      <td style={{ padding: '8px 12px', fontWeight: 600 }}>{d.type}</td>
+                      <td style={{ padding: '8px 12px', color: 'var(--text-secondary)' }}>{d.zone || d.location}</td>
+                      <td style={{ padding: '8px 12px' }}>{d.confidence}</td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <span className={`badge ${d.severity === 'CRITICAL' ? 'badge-red' : 'badge-amber'}`}>{d.severity}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+        if (obj.type === 'flight_comparison') {
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <div className="stride-card" style={{ flex: 1, padding: 16, border: '1px solid var(--border-primary)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, textTransform: 'uppercase' }}>{obj.data.flight1}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{obj.data.total_defects_f1}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Total Defects</div>
+                </div>
+                <div className="stride-card" style={{ flex: 1, padding: 16, border: '1px solid var(--border-primary)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, textTransform: 'uppercase' }}>{obj.data.flight2}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{obj.data.total_defects_f2}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Total Defects</div>
+                </div>
+              </div>
+              <div className="stride-card" style={{ padding: 16, display: 'flex', justifyContent: 'space-between', border: '1px solid var(--border-primary)' }}>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Health Delta</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: String(obj.data.health_delta).includes('-') ? 'var(--accent-red)' : 'var(--accent-green)' }}>{obj.data.health_delta}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>New Defects</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: obj.data.new_defects > 0 ? 'var(--accent-red)' : 'var(--text-primary)' }}>+{obj.data.new_defects}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Resolved</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: obj.data.resolved_defects > 0 ? 'var(--accent-green)' : 'var(--text-primary)' }}>-{obj.data.resolved_defects}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Worst Location</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-amber)' }}>{obj.data.worst_location}</div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+        if (obj.type === 'repair_plan') {
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}><Brain size={14} color="var(--accent-blue)"/> Prioritized Repair Plan</div>
+              {obj.data.map((d: any, i: number) => (
+                <div key={i} className="stride-card" style={{ padding: '12px 16px', border: '1px solid var(--border-primary)', display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div className={`badge ${d.priority === 'P1' ? 'badge-red' : d.priority === 'P2' ? 'badge-amber' : 'badge-blue'}`} style={{ fontSize: 14, padding: '4px 8px' }}>{d.priority}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{d.method}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      Target: <span style={{ fontFamily: 'var(--font-mono)', color: 'white' }}>{d.defect_id}</span>
+                      <div style={{ width: 4, height: 4, borderRadius: 2, background: 'var(--border-primary)' }} />
+                      Urgency: <span style={{ color: d.urgency.toLowerCase().includes('immediate') ? 'var(--accent-red)' : 'var(--accent-amber)' }}>{d.urgency}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        }
+        if (obj.type === 'risk_matrix') {
+          return (
+            <div className="stride-card" style={{ padding: 20, border: '1px solid var(--accent-red)', marginTop: 12, background: 'var(--accent-red-glow)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--accent-red)', letterSpacing: '0.05em', marginBottom: 4 }}>Overall Structural Risk Score</div>
+                  <div style={{ fontSize: 42, fontWeight: 800, fontFamily: 'var(--font-mono)', color: 'var(--accent-red)', lineHeight: 1 }}>{obj.data.score}<span style={{ fontSize: 18, color: 'var(--text-muted)' }}>/10</span></div>
+                </div>
+                <div style={{ textAlign: 'right', background: 'var(--bg-primary)', padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--accent-red)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Likelihood: <span style={{ color: 'white', fontWeight: 700 }}>{obj.data.likelihood}</span></div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Impact: <span style={{ color: 'white', fontWeight: 700 }}>{obj.data.impact}</span></div>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: 'white', fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={12} color="var(--accent-red)"/> Key Risk Factors:</div>
+              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {obj.data.factors.map((f: string, i: number) => <li key={i}>{f}</li>)}
+              </ul>
+            </div>
+          );
+        }
+      } catch (e) {
+        // Fallback during streaming of JSON
+        if (isStreaming) {
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-muted)', fontSize: 12, fontStyle: 'italic' }}>
+              <div style={{ animation: 'spin 1s linear infinite' }}><RefreshCw size={12} /></div>
+              Processing structured analysis response...
+            </div>
+          );
+        } else {
+          return <div style={{ fontSize: 13, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' }}>{text}</div>;
+        }
+      }
+    }
+
+    // Fallback to basic Markdown parsing
     const parts = text.split(/(\[TABLE: defects\]|\[CHART: severity\]|\[CHART: risk\]|\*\*[^*]+\*\*|`[^`]+`)/g);
     return parts.map((part, i) => {
       if (part === '[TABLE: defects]') return <DefectTable key={i} />;
@@ -235,7 +371,6 @@ function ChatContent() {
       if (part === '[CHART: risk]') return <RiskChart key={i} />;
       if (/^\*\*[^*]+\*\*$/.test(part)) return <strong key={i} style={{ color:'var(--text-primary)' }}>{part.slice(2,-2)}</strong>;
       if (/^`[^`]+`$/.test(part)) return <code key={i} style={{ fontFamily:'var(--font-mono)', fontSize:12, background:'var(--bg-elevated)', padding:'1px 5px', borderRadius:3, color:'var(--accent-cyan)' }}>{part.slice(1,-1)}</code>;
-      // Handle newlines
       return <span key={i}>{part.split('\n').map((line, j) => <React.Fragment key={j}>{line}{j !== part.split('\n').length - 1 && <br />}</React.Fragment>)}</span>;
     });
   };
@@ -276,7 +411,7 @@ function ChatContent() {
           <div style={{ width:1, height:16, background:'var(--border-primary)' }}/>
           <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--text-secondary)' }}>
             <Zap size={11} color="var(--accent-amber)"/>
-            Context Loader Active: 3 flights · 14 defects
+            Context Loader Active: {stats.numFlights} flights · {stats.numDefects} defects
           </div>
         </div>
 
@@ -288,8 +423,8 @@ function ChatContent() {
                 {m.role==='user' ? 'Operator' : 'AI Inspector'}
               </div>
               <div style={{ padding:'14px 18px', borderRadius: m.role==='user'?'var(--radius-lg) var(--radius-lg) 4px var(--radius-lg)':'var(--radius-lg) var(--radius-lg) var(--radius-lg) 4px', background: m.role==='user'?'var(--accent-blue)':'var(--bg-card)', border: m.role==='user'?'none':'1px solid var(--border-primary)', color: m.role==='user'?'white':'var(--text-secondary)', lineHeight:1.6, fontSize:13, boxShadow:'var(--shadow-card)' }}>
-                {renderContent(m.content)}
-                {isStreaming && i===messages.length-1 && m.role==='assistant' && (
+                {renderContent(m.content, isStreaming && i === messages.length - 1)}
+                {isStreaming && i===messages.length-1 && m.role==='assistant' && !m.content.trim().startsWith('{') && (
                   <span style={{ display:'inline-block', width:2, height:14, background:'var(--accent-blue)', marginLeft:2, animation:'blink 1s step-end infinite', verticalAlign:'middle' }}/>
                 )}
               </div>

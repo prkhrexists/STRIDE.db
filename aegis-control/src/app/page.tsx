@@ -3,111 +3,62 @@
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import PageShell from '@/components/PageShell';
+import PiVideoStream, { type StreamState } from '@/components/PiVideoStream';
 import { ToastProvider, useToast } from '@/components/Toast';
-import { ArtificialHorizon, CompassWidget } from '@/components/FlightInstruments';
+import FlightTelemetry, { type TelemetryFrame, type TelemetryMode } from '@/components/FlightTelemetry';
 import {
-  Activity, Battery, Gauge, Navigation, Radio, Camera,
-  Video, Image as ImageIcon, Zap, AlertTriangle, CheckCircle2,
-  Play, Square, RefreshCw, Shield, Cpu, Wifi, Crosshair, Map as MapIcon, RotateCcw, MonitorPlay
+  Activity, Camera, Cpu,
+  Play, Square, RefreshCw, Crosshair, MonitorPlay
 } from 'lucide-react';
+
+const MAV_WS_URL = process.env.NEXT_PUBLIC_MAV_WS_URL || 'ws://localhost:3002/telemetry';
 
 // --- Types ---
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
 interface LogEntry { id: string; ts: string; level: LogLevel; source: string; message: string; }
-interface PiStatus { connected: boolean; cpu_pct?: number; ram_pct?: number; storage_used_gb?: number; storage_total_gb?: number; camera_connected?: boolean; temperature_c?: number; capture_active?: boolean; total_captured?: number; capture_elapsed_s?: number; }
-interface Telemetry { timestamp: number; altitude: number; groundspeed: number; airspeed: number; heading: number; roll: number; pitch: number; yaw: number; battery_pct: number; battery_voltage: number; battery_current: number; gps_sats: number; gps_fix: string; mode: string; armed: boolean; signal_strength: number; imu_status: string; phase: string; }
-
-// --- Subcomponents ---
-function TelemetryPanel({ telemetry, onCommand }: { telemetry: Telemetry | null, onCommand: (cmd: string) => void }) {
-  const connected = !!telemetry;
-  const alt = telemetry?.altitude ?? 0;
-  const spd = telemetry?.groundspeed ?? 0;
-  const hdg = telemetry?.heading ?? 0;
-  const bat = telemetry?.battery_pct ?? 0;
-  const mode = telemetry?.mode ?? 'OFFLINE';
-  const batColor = bat > 40 ? 'var(--accent-green)' : bat > 20 ? 'var(--accent-amber)' : 'var(--accent-red)';
-  const armed = telemetry?.armed ?? false;
-
-  return (
-    <div className="stride-card" style={{ display:'flex', flexDirection:'column', overflow:'hidden', height: '100%' }}>
-      <div className="card-header">
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <Activity size={13} color="var(--accent-blue)" />
-          <span className="card-header-title">Flight Telemetry</span>
-        </div>
-        <div className="badge" style={{ background: connected?'var(--accent-green-glow)':'var(--accent-red-glow)', color: connected?'var(--accent-green)':'var(--accent-red)', borderColor: connected?'rgba(34,197,94,0.3)':'rgba(239,68,68,0.3)' }}>
-          <div className={`status-dot ${connected?'status-online':'status-offline'}`} />
-          {connected ? 'LINK ACTIVE' : 'NO LINK'}
-        </div>
-      </div>
-
-      <div style={{ padding:14, flex:1, display:'flex', flexDirection:'column', gap:14, overflowY:'auto' }}>
-        {/* Instruments row */}
-        <div style={{ display:'flex', justifyContent:'space-around', alignItems:'center', paddingBottom:14, borderBottom:'1px solid var(--border-primary)' }}>
-          <div style={{ textAlign:'center' }}>
-            <ArtificialHorizon roll={telemetry?.roll ?? 0} pitch={telemetry?.pitch ?? 0} size={90} />
-            <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:6, fontWeight:600 }}>ATTITUDE</div>
-          </div>
-          <div style={{ textAlign:'center' }}>
-            <CompassWidget heading={telemetry?.heading ?? 0} size={90} />
-            <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:6, fontWeight:600 }}>HEADING</div>
-          </div>
-        </div>
-
-        {/* Primary Stats */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-          {[
-            { label:'Altitude', value: `${alt.toFixed(1)} m`, color:'var(--accent-blue)' },
-            { label:'Speed', value: `${spd.toFixed(1)} m/s`, color:'var(--text-primary)' },
-            { label:'GPS', value: connected ? `${telemetry.gps_sats} Sats (${telemetry.gps_fix})` : '---', color: connected && telemetry.gps_sats > 8 ? 'var(--accent-green)' : 'var(--accent-amber)' },
-            { label:'Mode', value: mode, color:'var(--text-primary)' },
-            { label:'Signal', value: connected ? `${telemetry.signal_strength}%` : '---', color:'var(--accent-green)' },
-            { label:'IMU', value: telemetry?.imu_status ?? '---', color:'var(--accent-green)' },
-          ].map((s,i) => (
-            <div key={i} style={{ background:'var(--bg-elevated)', padding:'8px 12px', borderRadius:'var(--radius-sm)', border:'1px solid var(--border-primary)' }}>
-              <div style={{ fontSize:10, color:'var(--text-muted)', fontWeight:600, textTransform:'uppercase' }}>{s.label}</div>
-              <div style={{ fontSize:13, fontWeight:700, color:s.color, fontFamily:'var(--font-mono)', marginTop:2 }}>{s.value}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Battery */}
-        <div>
-          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6, alignItems:'center' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:5 }}>
-              <Battery size={12} color={batColor} />
-              <span style={{ fontSize:11, color:'var(--text-secondary)', fontWeight:600 }}>Battery</span>
-            </div>
-            <span style={{ fontSize:12, color:'var(--text-muted)' }}>
-              {connected ? `${telemetry.battery_voltage.toFixed(1)}V · ${telemetry.battery_current.toFixed(1)}A` : ''}
-            </span>
-            <span style={{ fontSize:13, fontWeight:700, color: batColor, fontFamily:'var(--font-mono)' }}>{connected ? `${bat}%` : '---'}</span>
-          </div>
-          <div className="progress-track"><div className="progress-fill" style={{ width: `${bat}%`, background: batColor }} /></div>
-        </div>
-
-        {/* Action Buttons */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:'auto' }}>
-          <button className={`btn ${armed ? 'btn-danger' : 'btn-success'}`} onClick={() => onCommand(armed ? 'disarm' : 'arm')} disabled={!connected} style={{ justifyContent:'center' }}>
-            {armed ? 'Disarm' : 'Arm Drone'}
-          </button>
-          <button className="btn btn-primary" onClick={() => onCommand('takeoff')} disabled={!connected || !armed || telemetry?.phase !== 'ground'} style={{ justifyContent:'center' }}>
-            Takeoff
-          </button>
-          <button className="btn btn-secondary" onClick={() => onCommand('start_mission')} disabled={!connected || !armed} style={{ justifyContent:'center' }}>
-            <MapIcon size={12}/> Mission
-          </button>
-          <button className="btn btn-secondary" onClick={() => onCommand('rth')} disabled={!connected || !armed} style={{ justifyContent:'center' }}>
-            <RotateCcw size={12}/> RTH
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+type PiConnectionState = 'unconfigured' | 'connecting' | 'online' | 'offline';
+interface PiStatus {
+  connected?: boolean;
+  configured?: boolean;
+  cpu_pct?: number;
+  ram_pct?: number;
+  ram_used_mb?: number;
+  ram_total_mb?: number;
+  storage_used_gb?: number;
+  storage_total_gb?: number;
+  camera_connected?: boolean;
+  camera_resolution?: string;
+  temperature_c?: number;
+  capture_active?: boolean;
+  total_captured?: number;
+  capture_elapsed_s?: number;
+  message?: string;
 }
-
-function PiConnectionPanel({ status }: { status: PiStatus | null }) {
-  const connected = status?.connected;
+// --- Subcomponents ---
+function PiConnectionPanel({
+  status,
+  connectionState,
+  onRetry,
+}: {
+  status: PiStatus | null;
+  connectionState: PiConnectionState;
+  onRetry: () => void;
+}) {
+  const statusLabel =
+    connectionState === 'online'
+      ? 'ONLINE'
+      : connectionState === 'connecting'
+        ? 'CONNECTING'
+        : connectionState === 'unconfigured'
+          ? 'NOT CONFIGURED'
+          : 'OFFLINE';
+  const statusColor =
+    connectionState === 'online'
+      ? 'var(--accent-green)'
+      : connectionState === 'connecting'
+        ? 'var(--accent-amber)'
+        : 'var(--accent-red)';
+  const online = connectionState === 'online';
   return (
     <div className="stride-card" style={{ display:'flex', flexDirection:'column', overflow:'hidden' }}>
       <div className="card-header">
@@ -115,16 +66,19 @@ function PiConnectionPanel({ status }: { status: PiStatus | null }) {
           <Cpu size={13} color="var(--accent-blue)" />
           <span className="card-header-title">Pi Connection</span>
         </div>
-        <div className={`status-dot ${connected?'status-online':'status-offline'}`} />
+        <div
+          className={`status-dot ${connectionState === 'online' ? 'status-online' : 'status-offline'}`}
+          style={connectionState === 'connecting' ? { background: 'var(--accent-amber)', animation: 'pulse-dot 1s infinite' } : undefined}
+        />
       </div>
       <div style={{ padding:14, display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
         {[
-          { label:'Status', value: connected ? 'ONLINE' : 'OFFLINE', color: connected ? 'var(--accent-green)' : 'var(--accent-red)' },
-          { label:'Camera', value: status?.camera_connected ? 'CONNECTED' : 'NOT DETECTED', color: status?.camera_connected ? 'var(--accent-green)' : 'var(--accent-red)' },
-          { label:'CPU Temp', value: connected ? `${status?.temperature_c?.toFixed(1)}°C` : '---', color: 'var(--text-primary)' },
-          { label:'CPU Load', value: connected ? `${status?.cpu_pct?.toFixed(1)}%` : '---', color: 'var(--text-primary)' },
-          { label:'RAM Used', value: connected ? `${status?.ram_used_mb}MB / ${status?.ram_total_mb}MB` : '---', color: 'var(--text-primary)' },
-          { label:'Storage', value: connected ? `${status?.storage_used_gb}GB / ${status?.storage_total_gb}GB` : '---', color: 'var(--text-primary)' },
+          { label:'Status', value: statusLabel, color: statusColor },
+          { label:'Camera', value: online ? (status?.camera_resolution || (status?.camera_connected ? 'CONNECTED' : 'NOT DETECTED')) : '---', color: status?.camera_connected ? 'var(--accent-green)' : 'var(--text-muted)' },
+          { label:'CPU Temp', value: online ? `${status?.temperature_c?.toFixed(1) ?? '—'}°C` : '---', color: 'var(--text-primary)' },
+          { label:'CPU Load', value: online ? `${status?.cpu_pct?.toFixed(1) ?? '—'}%` : '---', color: 'var(--text-primary)' },
+          { label:'RAM', value: online ? `${status?.ram_used_mb ?? '—'} / ${status?.ram_total_mb ?? '—'} MB` : '---', color: 'var(--text-primary)' },
+          { label:'Storage', value: online ? `${status?.storage_used_gb ?? '—'} / ${status?.storage_total_gb ?? '—'} GB` : '---', color: 'var(--text-primary)' },
         ].map((s,i) => (
           <div key={i} style={{ padding:'6px 0', borderBottom:'1px solid var(--border-primary)' }}>
             <div style={{ fontSize:10, color:'var(--text-muted)', fontWeight:600, textTransform:'uppercase', marginBottom:2 }}>{s.label}</div>
@@ -132,6 +86,13 @@ function PiConnectionPanel({ status }: { status: PiStatus | null }) {
           </div>
         ))}
       </div>
+      {connectionState === 'offline' && (
+        <div style={{ padding:'0 14px 14px' }}>
+          <button type="button" className="btn btn-secondary btn-sm" style={{ width:'100%', justifyContent:'center' }} onClick={onRetry}>
+            <RefreshCw size={12} /> Retry Connection
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -155,7 +116,7 @@ function ActivityLogPanel({ logs }: { logs: LogEntry[] }) {
       </div>
       <div ref={scrollRef} style={{ flex:1, overflowY:'auto', padding:'8px 12px', display:'flex', flexDirection:'column', gap:4, background:'var(--bg-secondary)' }}>
         {logs.map((l, i) => (
-          <div key={i} style={{ display:'flex', gap:10, fontSize:11, fontFamily:'var(--font-mono)', padding:'4px 0', borderBottom: i<logs.length-1?'1px dashed var(--border-primary)':'none' }}>
+          <div key={i} style={{ display:'flex', gap:10, fontSize:11, fontFamily:'var(--font-mono)', padding:'4px 0', borderBottom: i < logs.length - 1 ? '1px dashed var(--border-primary)' : 'none' }}>
             <span style={{ color:'var(--text-muted)' }}>{new Date(l.ts).toLocaleTimeString([], {hour12:false})}</span>
             <span style={{ color:levelColor(l.level), width:55, flexShrink:0 }}>[{l.level}]</span>
             <span style={{ color:'var(--text-secondary)', width:60, flexShrink:0 }}>{l.source}</span>
@@ -271,48 +232,169 @@ function CinematicDemoOverlay({ stepIndex, onCancel }: { stepIndex: number, onCa
 // --- Main Content ---
 function DashboardContent() {
   const { success, error, info } = useToast();
-  const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [telemetry, setTelemetry] = useState<TelemetryFrame | null>(null);
+  const [telemetryMode, setTelemetryMode] = useState<TelemetryMode>('idle');
   const [piStatus, setPiStatus] = useState<PiStatus | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isDemoMode, setIsDemoMode] = useState(false);
-  const [camUrl, setCamUrl] = useState('');
-  
+  const linkLostLogged = useRef(false);
+  const [piConfigured, setPiConfigured] = useState(false);
+  const [connectionState, setConnectionState] = useState<PiConnectionState>('connecting');
+  const [streamState, setStreamState] = useState<StreamState>('idle');
+  const [demoFeedUrl, setDemoFeedUrl] = useState('');
+  const [statusPollKey, setStatusPollKey] = useState(0);
+
   // Cinematic Demo State
   const [demoStep, setDemoStep] = useState(-1);
 
-  // Setup Streams
+  const pollPiStatus = async () => {
+    try {
+      const settingsRes = await fetch('/api/system/settings');
+      const settings = settingsRes.ok ? await settingsRes.json() : { configured: false };
+      const configured = Boolean(settings.configured);
+
+      setPiConfigured(configured);
+      if (!configured) {
+        setConnectionState('unconfigured');
+        setPiStatus(null);
+        return;
+      }
+
+      setConnectionState('connecting');
+
+      const res = await fetch('/api/pi/status', { cache: 'no-store' });
+      if (!res.ok) {
+        setConnectionState('offline');
+        return;
+      }
+
+      const data = await res.json();
+      setPiStatus(data);
+      setConnectionState(data.connected ? 'online' : 'offline');
+    } catch {
+      setPiStatus(null);
+      if (piConfigured) setConnectionState('offline');
+    }
+  };
+
   useEffect(() => {
-    const telEs = new EventSource(`/api/telemetry/stream?demo=${isDemoMode?'1':'0'}`);
-    telEs.onmessage = (e) => { try { setTelemetry(JSON.parse(e.data)); } catch {} };
-    
+    pollPiStatus();
+  }, [statusPollKey]);
+
+  useEffect(() => {
+    if (!piConfigured) return;
+    const piPoll = setInterval(pollPiStatus, 5000);
+    return () => clearInterval(piPoll);
+  }, [piConfigured, statusPollKey]);
+
+  const appendLog = (level: LogLevel, source: string, message: string) => {
+    setLogs((p) => [
+      ...p,
+      { id: Math.random().toString(), ts: new Date().toISOString(), level, source, message },
+    ].slice(-100));
+  };
+
+  // Activity log stream
+  useEffect(() => {
     const logEs = new EventSource('/api/logs/stream');
     logEs.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
         if (d.type === 'backfill') setLogs(d.entries);
-        else if (d.type === 'entry') setLogs(p => [...p, d.entry].slice(-100));
+        else if (d.type === 'entry') setLogs((p) => [...p, d.entry].slice(-100));
       } catch {}
     };
+    return () => logEs.close();
+  }, []);
 
-    const piPoll = setInterval(async () => {
+  // Demo telemetry replay from /data/demo-telemetry.json
+  useEffect(() => {
+    if (!isDemoMode) {
+      setTelemetry(null);
+      setTelemetryMode('idle');
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let index = 0;
+
+    const startReplay = async () => {
       try {
-        const res = await fetch('/api/pi/status');
-        if (res.ok) {
-          const data = await res.json();
-          setPiStatus(data);
-          if (data.connected && !camUrl) {
-            setCamUrl(data.simulated ? '/cracks/04168eeebk3f94229020b7d905d28c43-1-_JPG.rf.b7456ec9aed620a184c515508604468c.jpg' : `${process.env.NEXT_PUBLIC_PI_URL || 'http://192.168.1.100:5001'}/stream`);
-          } else if (!data.connected) {
-            setCamUrl('');
-          }
-        }
-      } catch {
-        setPiStatus(null);
-        setCamUrl('');
-      }
-    }, 1000);
+        const res = await fetch('/data/demo-telemetry.json');
+        if (!res.ok || cancelled) return;
+        const payload = await res.json();
+        const frames: TelemetryFrame[] = payload.frames ?? [];
+        const intervalMs = payload.intervalMs ?? 100;
+        if (!frames.length || cancelled) return;
 
-    return () => { telEs.close(); logEs.close(); clearInterval(piPoll); };
+        setTelemetryMode('demo');
+        setTelemetry({ ...frames[0], timestamp: Date.now() });
+
+        timer = setInterval(() => {
+          index = (index + 1) % frames.length;
+          setTelemetry({ ...frames[index], timestamp: Date.now() });
+        }, intervalMs);
+      } catch {
+        if (!cancelled) {
+          setTelemetryMode('idle');
+          setTelemetry(null);
+        }
+      }
+    };
+
+    startReplay();
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+      setTelemetry(null);
+      setTelemetryMode('idle');
+    };
+  }, [isDemoMode]);
+
+  // Live MAVLink WebSocket (skipped during demo)
+  useEffect(() => {
+    if (isDemoMode) return;
+
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      ws = new WebSocket(MAV_WS_URL);
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string);
+          if (msg.type === 'telemetry' && msg.linkActive && msg.data) {
+            linkLostLogged.current = false;
+            setTelemetryMode('live');
+            setTelemetry({ ...msg.data, timestamp: Date.now() });
+          } else if (msg.type === 'link_lost') {
+            setTelemetryMode('idle');
+            setTelemetry(null);
+            if (!linkLostLogged.current) {
+              linkLostLogged.current = true;
+              appendLog('WARN', 'MAVLINK', 'LINK LOST — heartbeat timeout (>3s). Telemetry unavailable.');
+            }
+          } else if (msg.type === 'awaiting') {
+            setTelemetryMode('idle');
+            setTelemetry(null);
+          }
+        } catch {}
+      };
+
+      ws.onclose = () => {
+        setTelemetryMode('idle');
+        setTelemetry(null);
+        if (!isDemoMode) reconnectTimer = setTimeout(connect, 2000);
+      };
+    };
+
+    connect();
+    return () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
+    };
   }, [isDemoMode]);
 
   // Demo Orchestration Engine
@@ -333,7 +415,7 @@ function DashboardContent() {
       setLogs(p => [...p, { id: Math.random().toString(), ts: new Date().toISOString(), level: 'INFO', source: 'DEMO_SEQ', message: step.log }]);
 
       // Visual Side Effects per step
-      if (step.id === 'camera') setCamUrl('/cracks/04168eeebk3f94229020b7d905d28c43-1-_JPG.rf.b7456ec9aed620a184c515508604468c.jpg');
+      if (step.id === 'camera') setDemoFeedUrl('/cracks/04168eeebk3f94229020b7d905d28c43-1-_JPG.rf.b7456ec9aed620a184c515508604468c.jpg');
       if (step.id === 'capture') setPiStatus(p => p ? { ...p, capture_active: true } : null);
       if (step.id === 'upload') setPiStatus(p => p ? { ...p, capture_active: false, total_captured: 24 } : null);
       if (step.id === 'detect') setLogs(p => [...p, { id: Math.random().toString(), ts: new Date().toISOString(), level: 'WARN', source: 'AI_CORE', message: 'Critical defect (Spalling) found on NW Facade.' }]);
@@ -358,17 +440,37 @@ function DashboardContent() {
     } catch { error('Failed to send command to drone'); }
   };
 
-  const handlePiCmd = async (action: string, payload?: any) => {
+  const handlePiCmd = async (action: string, payload?: { interval?: number }) => {
     try {
-      const res = await fetch('/api/pi/status', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, ...payload}) });
+      const body =
+        action === 'start'
+          ? { action: 'start', interval: payload?.interval }
+          : action === 'stop'
+            ? { action: 'stop' }
+            : { action: 'snapshot' };
+
+      const res = await fetch('/api/pi/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
       const data = await res.json();
-      if (data.success) info(data.message);
-      else error(data.message);
-    } catch { error('Failed to send command to Pi'); }
+      if (data.success) {
+        info(data.message || 'Capture command sent');
+        pollPiStatus();
+      } else {
+        error(data.message || 'Capture command failed');
+      }
+    } catch {
+      error('Failed to send command to Pi');
+    }
   };
 
+  const streamLive = streamState === 'live' || Boolean(demoFeedUrl);
+  const streamEnabled = piConfigured && connectionState !== 'unconfigured' && !demoFeedUrl;
+
   return (
-    <PageShell title="Flight Operations" subtitle="STRIDE GCS Dashboard" isDemoMode={isDemoMode} onToggleDemo={() => setIsDemoMode(!isDemoMode)} systemStatus={telemetry ? 'online' : 'offline'} noPadding>
+    <PageShell title="Flight Operations" subtitle="STRIDE GCS Dashboard" isDemoMode={isDemoMode} onToggleDemo={() => setIsDemoMode(!isDemoMode)} systemStatus={telemetryMode === 'live' ? 'online' : isDemoMode ? 'degraded' : 'offline'} noPadding>
       <div style={{ display:'grid', gridTemplateColumns:'300px 1fr 340px', gap:14, padding:14, height:'100%', overflow:'hidden', position:'relative' }}>
         
         <CinematicDemoOverlay stepIndex={demoStep} onCancel={() => setIsDemoMode(false)} />
@@ -376,7 +478,14 @@ function DashboardContent() {
         {/* LEFT COLUMN: Media & Logs */}
         <div style={{ display:'flex', flexDirection:'column', gap:14, height:'100%', overflow:'hidden' }}>
           <MediaControls status={piStatus} onAction={handlePiCmd} />
-          <PiConnectionPanel status={piStatus} />
+          <PiConnectionPanel
+            status={piStatus}
+            connectionState={connectionState}
+            onRetry={() => {
+              setConnectionState('connecting');
+              setStatusPollKey((k) => k + 1);
+            }}
+          />
           <ActivityLogPanel logs={logs} />
         </div>
 
@@ -385,14 +494,14 @@ function DashboardContent() {
           {/* Top Overlays */}
           <div style={{ position:'absolute', top:14, left:14, zIndex:10, display:'flex', gap:8 }}>
             <div className="glass badge" style={{ padding:'5px 12px' }}>
-              <div style={{ width:7, height:7, borderRadius:'50%', background: camUrl ? 'var(--accent-red)' : 'var(--text-muted)', animation: camUrl ? 'pulse-dot 1s infinite' : 'none' }} />
-              <span style={{ fontSize:11, fontWeight:700 }}>{camUrl ? 'LIVE FEED' : 'OFFLINE'}</span>
+              <div style={{ width:7, height:7, borderRadius:'50%', background: streamLive ? 'var(--accent-red)' : 'var(--text-muted)', animation: streamLive ? 'pulse-dot 1s infinite' : 'none' }} />
+              <span style={{ fontSize:11, fontWeight:700 }}>{streamLive ? 'LIVE FEED' : 'OFFLINE'}</span>
             </div>
-            {camUrl && <div className="glass badge"><MonitorPlay size={11} color="var(--accent-green)"/> 30 FPS</div>}
+            {streamLive && <div className="glass badge"><MonitorPlay size={11} color="var(--accent-green)"/> LIVE</div>}
           </div>
 
           {/* Crosshair Overlay */}
-          {camUrl && (
+          {streamLive && (
             <div style={{ position:'absolute', inset:0, zIndex:5, pointerEvents:'none', display:'flex', alignItems:'center', justifyContent:'center' }}>
               <Crosshair size={40} color="rgba(255,255,255,0.3)" strokeWidth={1} />
             </div>
@@ -400,8 +509,23 @@ function DashboardContent() {
 
           {/* Feed Content */}
           <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', position:'relative', overflow:'hidden' }}>
-            {camUrl ? (
-              <img src={camUrl} alt="Live Feed" style={{ width:'100%', height:'100%', objectFit:'cover' }} onError={() => setCamUrl('')} />
+            {connectionState === 'unconfigured' ? (
+              <div style={{ textAlign:'center', zIndex:1, padding:24 }}>
+                <Camera size={32} color="var(--text-muted)" style={{ marginBottom:12 }} />
+                <div style={{ fontSize:16, fontWeight:600, color:'var(--text-secondary)' }}>Configure Pi in Settings</div>
+                <div style={{ fontSize:12, marginTop:8, color:'var(--text-muted)' }}>Save your Raspberry Pi IP and stream endpoint to connect.</div>
+                <Link href="/settings" className="btn btn-primary btn-sm" style={{ marginTop:16, display:'inline-flex' }}>Open Settings</Link>
+              </div>
+            ) : demoFeedUrl ? (
+              <img src={demoFeedUrl} alt="Demo Feed" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+            ) : streamEnabled ? (
+              <PiVideoStream enabled={streamEnabled} onStateChange={setStreamState} />
+            ) : connectionState === 'connecting' ? (
+              <div style={{ textAlign:'center', zIndex:1 }}>
+                <RefreshCw size={28} color="var(--accent-amber)" style={{ animation:'spin 2s linear infinite', marginBottom:12 }} />
+                <div style={{ fontSize:16, fontWeight:600, color:'var(--text-secondary)' }}>Connecting to Pi…</div>
+                <div style={{ fontSize:12, marginTop:4, color:'var(--text-muted)' }}>Establishing status and video stream</div>
+              </div>
             ) : (
               <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16, color:'var(--text-muted)' }}>
                 {/* Animated offline grid */}
@@ -412,15 +536,22 @@ function DashboardContent() {
                   <Camera size={24} color="var(--text-muted)" />
                 </div>
                 <div style={{ textAlign:'center', zIndex:1 }}>
-                  <div style={{ fontSize:16, fontWeight:600, color:'var(--text-secondary)' }}>Awaiting Pi Stream</div>
-                  <div style={{ fontSize:12, marginTop:4 }}>Camera feed is currently offline or disconnected</div>
+                  <div style={{ fontSize:16, fontWeight:600, color:'var(--text-secondary)' }}>Pi Offline</div>
+                  <div style={{ fontSize:12, marginTop:4 }}>{piStatus?.message || 'Cannot reach Pi. Check network and stream proxy.'}</div>
+                  <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop:12 }} onClick={() => { setConnectionState('connecting'); setStatusPollKey((k) => k + 1); }}>
+                    <RefreshCw size={12} /> Retry
+                  </button>
                 </div>
               </div>
             )}
+            {connectionState === 'online' && streamState !== 'live' && !demoFeedUrl && (
+              <div style={{ position:'absolute', bottom:16, fontSize:12, color:'var(--text-muted)' }}>
+                {streamState === 'connecting' ? 'Waiting for video frames from ws://localhost:3001/stream…' : 'Video stream unavailable — run npm run dev (starts pi-proxy)'}
+              </div>
+            )}
           </div>
-          
-          {/* Bottom HUD */}
-          {camUrl && telemetry && (
+
+          {streamLive && telemetryMode !== 'idle' && telemetry && (
             <div style={{ position:'absolute', bottom:14, left:14, right:14, zIndex:10, display:'flex', gap:10, justifyContent:'center' }}>
               {[
                 { label:'ALT', value: `${telemetry.altitude.toFixed(1)}m` },
@@ -439,7 +570,7 @@ function DashboardContent() {
 
         {/* RIGHT COLUMN: Telemetry */}
         <div style={{ height:'100%', overflow:'hidden' }}>
-          <TelemetryPanel telemetry={telemetry} onCommand={handleDroneCmd} />
+          <FlightTelemetry mode={telemetryMode} telemetry={telemetry} onCommand={handleDroneCmd} />
         </div>
 
       </div>

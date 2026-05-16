@@ -1,9 +1,36 @@
 import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
 
 export async function GET() {
-  const reports = [
-    { id: 'rep_001', filename: 'report_flight_001_2026-05-14.pdf', date: '2026-05-14', size: '2.4 MB' },
-    { id: 'rep_002', filename: 'report_bridge_comparison_2026.pdf', date: '2026-05-10', size: '5.1 MB' },
-  ];
-  return NextResponse.json({ reports });
+  const reportsDir = path.join(process.cwd(), 'data', 'reports');
+
+  if (!fs.existsSync(reportsDir)) {
+    return NextResponse.json({ reports: [] });
+  }
+
+  try {
+    const files = fs.readdirSync(reportsDir).filter(f => f.endsWith('.pdf'));
+
+    const reports = files.map(filename => {
+      const filepath = path.join(reportsDir, filename);
+      const stats = fs.statSync(filepath);
+      const sizeMB = (stats.size / (1024 * 1024)).toFixed(1);
+
+      return {
+        id: filename.replace('.pdf', ''),
+        filename,
+        date: stats.mtime.toISOString().split('T')[0],
+        size: `${sizeMB} MB`,
+        downloadUrl: `/api/report/download?file=${filename}`,
+      };
+    });
+
+    // Sort newest first
+    reports.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    return NextResponse.json({ reports });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
 }

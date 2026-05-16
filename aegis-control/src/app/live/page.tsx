@@ -91,6 +91,7 @@ export default function LivePage() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [frameCount, setFrameCount] = useState(0);
   const [statusLogs, setStatusLogs] = useState<{msg: string, type: string}[]>([]);
+  const [lastSnapshot, setLastSnapshot] = useState<{url: string; status: string; detections: number} | null>(null);
   
   const requestRef = useRef<number>();
   const previousTimeRef = useRef<number>();
@@ -219,7 +220,7 @@ export default function LivePage() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              pylonId: 'pylon_A3', // default test target
+              pylonId: 'pylon_A3',
               interval: captureInterval,
               timestamp: Date.now(),
               cameraConfig: JSON.parse(localStorage.getItem('aegis_picam_config') || '{}'),
@@ -228,9 +229,22 @@ export default function LivePage() {
           });
           const data = await res.json();
           if (data.success) {
-            addLog(`Frame captured — pylon_A3 — GPS ${data.gps.lat.toFixed(4)}, ${data.gps.lon.toFixed(4)}`, 'success');
+            const gpsStr = `${data.gps.lat.toFixed(4)}, ${data.gps.lon.toFixed(4)}`;
+            if (data.yolo) {
+              const { status, detectionCount, maxConf, snapshotUrl } = data.yolo;
+              const logType = status === 'CRITICAL' ? 'error' : status === 'DEFECT' ? 'error' : 'success';
+              addLog(
+                `Frame #${f} — ${status} — ${detectionCount} detection(s) [conf: ${(maxConf * 100).toFixed(0)}%] — GPS ${gpsStr}`,
+                logType
+              );
+              if (snapshotUrl) {
+                setLastSnapshot({ url: snapshotUrl, status, detections: detectionCount });
+              }
+            } else {
+              addLog(`Frame #${f} captured — GPS ${gpsStr} (YOLO pending)`, 'success');
+            }
           } else {
-            addLog(`Frame failed: ${data.error}`, 'error');
+            addLog(`Frame #${f} failed: ${data.error}`, 'error');
           }
         } catch (err: any) {
           addLog(`Capture error: ${err.message}`, 'error');
@@ -420,7 +434,29 @@ export default function LivePage() {
         </div>
       </div>
 
+      {/* YOLO Last Snapshot Panel */}
+      {lastSnapshot && (
+        <div className={styles.statusLogPanel} style={{ marginBottom: '1rem' }}>
+          <h3 className={styles.statusLogTitle} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            YOLO LAST SNAPSHOT
+            <span style={{
+              fontSize: '0.7rem', padding: '2px 8px', borderRadius: '4px', fontWeight: 700,
+              background: lastSnapshot.status === 'CRITICAL' ? '#dc2626' : lastSnapshot.status === 'DEFECT' ? '#f59e0b' : '#16a34a',
+              color: '#fff',
+            }}>
+              {lastSnapshot.status} — {lastSnapshot.detections} detection(s)
+            </span>
+          </h3>
+          <img
+            src={lastSnapshot.url}
+            alt="YOLO annotated frame"
+            style={{ width: '100%', borderRadius: '6px', border: '2px solid #374151', maxHeight: '260px', objectFit: 'contain' }}
+          />
+        </div>
+      )}
+
       {/* Status Log Panel */}
+
       <div className={styles.statusLogPanel}>
         <h3 className={styles.statusLogTitle}>STATUS LOG</h3>
         {statusLogs.length === 0 ? (

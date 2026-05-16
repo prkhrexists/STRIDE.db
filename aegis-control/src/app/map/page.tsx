@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import PageShell from '@/components/PageShell';
 import { ToastProvider, useToast } from '@/components/Toast';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Flag, Filter, Upload, Play, Download, AlertTriangle, CheckCircle2, XCircle, BarChart2, Maximize, Map as MapIcon, Image as ImageIcon, Crosshair, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Flag, Filter, Upload, Play, Pause, Download, AlertTriangle, CheckCircle2, XCircle, BarChart2, Maximize, Map as MapIcon, Image as ImageIcon, Crosshair, ChevronRight, ChevronLeft, Video } from 'lucide-react';
 
 // --- Types ---
 interface BBox { x: number; y: number; w: number; h: number; type: string; }
@@ -138,13 +138,25 @@ function AnalysisContent() {
   const [allFrames, setAllFrames] = useState<Frame[]>([]);
   const [selectedFlightId, setSelectedFlightId] = useState<string>('');
   
-  const [filter, setFilter] = useState('All');
+  const [activeFilters, setActiveFilters] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'grid'|'map'>('grid');
   const [isCompare, setIsCompare] = useState(false);
   const [compareId, setCompareId] = useState('');
   const [activeFrameId, setActiveFrameId] = useState<string | null>(null);
   
   const [isLoading, setIsLoading] = useState(true);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzeProgress, setAnalyzeProgress] = useState(0);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Live Mode states
+  const [inputSource, setInputSource] = useState<'file' | 'live'>('file');
+  const [isLiveCapturing, setIsLiveCapturing] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     fetch('/api/analysis/flights')
@@ -164,17 +176,31 @@ function AnalysisContent() {
       });
   }, []);
 
+  // Stop Live Clean Up
+  useEffect(() => {
+    return () => {
+      if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
   const flightFrames = useMemo(() => allFrames.filter(f => f.flightId === selectedFlightId).sort((a,b)=>a.ts-b.ts), [allFrames, selectedFlightId]);
   
   const filtered = useMemo(() => {
     return flightFrames.filter(f => {
-      if(filter==='All') return true;
-      if(filter==='Critical') return f.status==='CRITICAL';
-      if(filter==='Flagged') return f.flagged;
-      if(filter==='Clean') return f.status==='CLEAN';
-      return f.type.toLowerCase() === filter.toLowerCase(); // Check exact defect type
+      if(activeFilters.length === 0) return true;
+      
+      let pass = true;
+      if (activeFilters.includes('Critical') && f.status !== 'CRITICAL') pass = false;
+      if (activeFilters.includes('Flagged') && !f.flagged) pass = false;
+      if (activeFilters.includes('Clean') && f.status !== 'CLEAN') pass = false;
+      
+      const typeFilters = ['Crack', 'Corrosion', 'Spalling'].filter(t => activeFilters.includes(t));
+      if (typeFilters.length > 0 && !typeFilters.includes(f.type.charAt(0).toUpperCase() + f.type.slice(1))) pass = false;
+      
+      return pass;
     });
-  }, [flightFrames, filter]);
+  }, [flightFrames, activeFilters]);
 
   const sf = flights.find(f=>f.id===selectedFlightId);
   const total = flightFrames.length;
@@ -182,9 +208,208 @@ function AnalysisContent() {
   const def = flightFrames.filter(f=>f.status==='DEFECT').length;
   const clean = flightFrames.filter(f=>f.status==='CLEAN').length;
 
-  const handleFlag = (id: string) => {
-    setAllFrames(allFrames.map(f=>f.id===id?{...f,flagged:true}:f));
-    warning('Frame flagged for urgent review');
+  const handleFlag = async (id: string) => {
+    // Optimistic
+    setAllFrames(allFrames.map(f=>f.id===id?{...f,flagged:!f.flagged}:f));
+    const frame = allFrames.find(f => f.id === id);
+    const newFlag = !(frame?.flagged);
+    try {
+      const res = await fetch(`/api/frames/${id}/flag`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flagged: newFlag })
+      });
+      if (!res.ok) throw new Error('Failed');
+      if (newFlag) warning('Frame flagged for urgent review');
+    } catch (e) {
+      // Rollback
+      setAllFrames(allFrames.map(f=>f.id===id?{...f,flagged:!newFlag}:f));
+      error('Failed to update flag state');
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    info('Uploading file...');
+    try {
+      const res = await fetch('/api/analysis/import', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        success('Log imported successfully');
+        setFlights([data.flight, ...flights]);
+        setSelectedFlightId(data.flight.id);
+      } else {
+        error(data.error || 'Import failed');
+      }
+    } catch (err) {
+      error('Failed to import file');
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const runAnalysis = async () => {
+    if (!sf || sf.status === 'ANALYZED') return;
+    
+    setIsAnalyzing(true);
+    setAnalyzeProgress(0);
+    info('Starting AI Analysis Pipeline job...');
+    
+    // Set status to analyzing locally
+    setFlights(flights.map(f => f.id === selectedFlightId ? { ...f, status: 'ANALYZING' } : f));
+    
+    try {
+      const res = await fetch('/api/analyze/job', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flightId: selectedFlightId, frames: flightFrames })
+      });
+      if (!res.ok) throw new Error('Job init failed');
+      const { jobId } = await res.json();
+      
+      const timer = setInterval(async () => {
+        try {
+          const stRes = await fetch(`/api/analyze/job/${jobId}`);
+          if (stRes.ok) {
+            const stData = await stRes.json();
+            setAnalyzeProgress(stData.progress || 0);
+            
+            if (stData.status === 'COMPLETED') {
+              clearInterval(timer);
+              setIsAnalyzing(false);
+              
+              // Apply results
+              let newFrames = [...allFrames];
+              let newCrit = 0, newDef = 0, newClean = 0;
+              
+              stData.results.forEach((r: any) => {
+                const frameIdx = newFrames.findIndex(f => f.id === r.frameId);
+                if (frameIdx > -1) {
+                  newFrames[frameIdx] = {
+                    ...newFrames[frameIdx],
+                    status: r.data.status,
+                    conf: r.data.maxConf ? parseFloat((r.data.maxConf * 100).toFixed(1)) : 100,
+                    url: r.data.snapshotUrl + '?t=' + Date.now(),
+                    type: r.data.detections?.length ? r.data.detections[0].class : 'none',
+                    bboxes: [], 
+                    flagged: r.data.status === 'CRITICAL'
+                  };
+                  if (r.data.status === 'CRITICAL') newCrit++;
+                  else if (r.data.status === 'DEFECT') newDef++;
+                  else newClean++;
+                }
+              });
+              
+              setAllFrames(newFrames);
+              setFlights(flights.map(f => f.id === selectedFlightId ? { ...f, status: 'ANALYZED' } : f));
+              success(`Analysis complete: ${newCrit} Critical, ${newDef} Moderate, ${newClean} Clean`);
+            }
+          }
+        } catch (e) {}
+      }, 2000);
+      
+    } catch (e) {
+      error('Failed to start analysis job');
+      setIsAnalyzing(false);
+      setFlights(flights.map(f => f.id === selectedFlightId ? { ...f, status: 'PENDING' } : f));
+    }
+  };
+
+  const startLiveAnalysis = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      
+      const newFlightId = `FL-LIVE-${Date.now().toString().slice(-4)}`;
+      const newFlight: Flight = {
+        id: newFlightId,
+        name: `Live Session ${new Date().toLocaleTimeString()}`,
+        date: new Date().toISOString(),
+        framesCount: 0,
+        status: 'ANALYZING'
+      };
+      
+      setFlights(prev => [newFlight, ...prev]);
+      setSelectedFlightId(newFlightId);
+      setIsLiveCapturing(true);
+      info('Live analysis started. Capturing every 5 seconds.');
+
+      liveIntervalRef.current = setInterval(async () => {
+        if (!videoRef.current) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth || 640;
+        canvas.height = videoRef.current.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        
+        canvas.toBlob(async (blob) => {
+          if (!blob) return;
+          const formData = new FormData();
+          formData.append('file', blob, 'frame.jpg');
+          formData.append('flightId', newFlightId);
+          formData.append('frameIndex', Date.now().toString());
+
+          try {
+            const res = await fetch('/api/analyze/frame', { method: 'POST', body: formData });
+            if (res.ok) {
+              const data = await res.json();
+              const newFrame: Frame = {
+                id: `fr-${Date.now()}`,
+                flightId: newFlightId,
+                url: data.snapshotUrl + '?t=' + Date.now(),
+                prevUrl: '',
+                status: data.status,
+                type: data.detections?.length ? data.detections[0].class : 'none',
+                conf: data.maxConf ? parseFloat((data.maxConf * 100).toFixed(1)) : 100,
+                lat: 0, lon: 0, ts: Date.now(),
+                bboxes: [], flagged: data.status === 'CRITICAL', ssim: 1,
+                metadata: { zone: 'Live Feed' }
+              };
+              setAllFrames(prev => [...prev, newFrame]);
+              setFlights(prev => prev.map(f => f.id === newFlightId ? { ...f, framesCount: f.framesCount + 1 } : f));
+            }
+          } catch (e) {
+            console.error('Frame upload failed', e);
+          }
+        }, 'image/jpeg', 0.8);
+
+      }, 5000); // 5 seconds
+      
+    } catch (e) {
+      error('Webcam permission denied or unavailable. Fallback to file mode.');
+      setInputSource('file');
+    }
+  };
+
+  const stopLiveAnalysis = () => {
+    if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    setIsLiveCapturing(false);
+    setFlights(prev => prev.map(f => f.id === selectedFlightId ? { ...f, status: 'ANALYZED' } : f));
+    success('Live analysis stopped and session finalized.');
+  };
+
+  // Timeline playback
+  useEffect(() => {
+    if (!isPlaying) return;
+    const timer = setInterval(() => {
+      if (filtered.length === 0) return;
+      setActiveFrameId(curr => {
+        const idx = filtered.findIndex(f => f.id === curr);
+        const nextIdx = idx === -1 || idx >= filtered.length - 1 ? 0 : idx + 1;
+        return filtered[nextIdx].id;
+      });
+    }, 500); // 2fps
+    return () => clearInterval(timer);
+  }, [isPlaying, filtered]);
+
+  const toggleFilter = (f: string) => {
+    setActiveFilters(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]);
   };
 
   if (isLoading) return <PageShell title="Analysis Center" noPadding><div style={{display:'flex',justifyContent:'center',alignItems:'center',height:'100vh',color:'var(--text-muted)'}}>Loading Inspection Data...</div></PageShell>;
@@ -192,9 +417,32 @@ function AnalysisContent() {
   return (
     <PageShell title="Analysis Center" subtitle="Post-flight image analysis & defect detection"
       actions={
-        <div style={{ display:'flex', gap:8 }}>
-          <button className="btn btn-secondary btn-sm"><Upload size={11}/> Import Logs</button>
-          <button className="btn btn-primary btn-sm" onClick={()=>success(`Analysis complete — ${crit+def} defects found`)}><Play size={11}/> Run AI Analysis</button>
+        <div style={{ display:'flex', gap:8, alignItems: 'center' }}>
+          <select className="stride-select" style={{ height: 28, padding: '0 8px' }} value={inputSource} onChange={e => { setInputSource(e.target.value as 'file'|'live'); if(e.target.value==='file' && isLiveCapturing) stopLiveAnalysis(); }}>
+            <option value="file">File Input</option>
+            <option value="live">Live Webcam</option>
+          </select>
+
+          {inputSource === 'file' ? (
+            <>
+              <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".json,.csv,.zip" style={{display:'none'}} />
+              <button className="btn btn-secondary btn-sm" onClick={() => fileInputRef.current?.click()}><Upload size={11}/> Import Logs</button>
+              
+              <button 
+                className="btn btn-primary btn-sm" 
+                onClick={runAnalysis} 
+                disabled={!sf || sf.status === 'ANALYZED' || isAnalyzing}
+              >
+                {isAnalyzing ? <span style={{animation:'spin 1s linear infinite', display:'inline-block'}}><Play size={11}/></span> : <Play size={11}/>} 
+                {isAnalyzing ? `Analyzing... ${analyzeProgress}%` : sf?.status === 'ANALYZED' ? 'Analyzed' : 'Run AI Analysis'}
+              </button>
+            </>
+          ) : (
+            <button className={`btn btn-sm ${isLiveCapturing ? 'btn-secondary' : 'btn-primary'}`} style={isLiveCapturing ? { background: 'var(--accent-red)', color: 'white', borderColor: 'transparent' } : {}} onClick={isLiveCapturing ? stopLiveAnalysis : startLiveAnalysis}>
+              {isLiveCapturing ? <Pause size={11}/> : <Video size={11}/>} 
+              {isLiveCapturing ? 'Stop Live Analysis' : 'Start Live Analysis'}
+            </button>
+          )}
         </div>
       }>
       
@@ -206,15 +454,15 @@ function AnalysisContent() {
           {/* Flights List */}
           <div className="stride-card" style={{ overflow:'hidden' }}>
             <div className="card-header">
-              <span className="card-header-title">Flights</span>
+              <span className="card-header-title">{inputSource === 'live' ? 'Live Sessions' : 'Flights'}</span>
               <span style={{ fontSize:11, color:'var(--text-muted)' }}>{flights.length} logs</span>
             </div>
             <div style={{ overflowY:'auto', maxHeight:240 }}>
               {flights.map(f=>(
-                <div key={f.id} onClick={()=>{ setSelectedFlightId(f.id); setActiveFrameId(null); }} style={{ padding:'12px 14px', cursor:'pointer', borderBottom:'1px solid var(--border-primary)', background: selectedFlightId===f.id?'var(--accent-blue-glow)':'transparent', borderLeft: selectedFlightId===f.id?'3px solid var(--accent-blue)':'3px solid transparent', transition:'all 0.15s' }}>
+                <div key={f.id} onClick={()=>{ setSelectedFlightId(f.id); setActiveFrameId(null); setIsPlaying(false); }} style={{ padding:'12px 14px', cursor:'pointer', borderBottom:'1px solid var(--border-primary)', background: selectedFlightId===f.id?'var(--accent-blue-glow)':'transparent', borderLeft: selectedFlightId===f.id?'3px solid var(--accent-blue)':'3px solid transparent', transition:'all 0.15s' }}>
                   <div style={{ fontSize:13, fontWeight:600, color: selectedFlightId===f.id?'var(--accent-blue-bright)':'var(--text-primary)' }}>{f.name}</div>
                   <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:4 }}>{new Date(f.date).toLocaleDateString()} · {f.framesCount} frames</div>
-                  <div style={{ fontSize:10, fontWeight:600, color:'var(--accent-green)', marginTop:4, textTransform:'uppercase' }}>{f.status}</div>
+                  <div style={{ fontSize:10, fontWeight:600, color:f.status==='ANALYZED'?'var(--accent-green)':'var(--accent-amber)', marginTop:4, textTransform:'uppercase' }}>{f.status}</div>
                 </div>
               ))}
             </div>
@@ -226,8 +474,15 @@ function AnalysisContent() {
               <Filter size={10}/> Filters
             </div>
             <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-              {['All','Critical','Flagged','Clean','Crack','Corrosion','Spalling'].map(opt=>(
-                <button key={opt} onClick={()=>setFilter(opt)} className={`btn btn-sm ${filter===opt?'btn-primary':'btn-secondary'}`} style={{ padding:'4px 10px', fontSize:11 }}>{opt}</button>
+              {['Critical','Flagged','Clean','Crack','Corrosion','Spalling'].map(opt=>(
+                <button 
+                  key={opt} 
+                  onClick={()=>toggleFilter(opt)} 
+                  className={`btn btn-sm ${activeFilters.includes(opt)?'btn-primary':'btn-secondary'}`} 
+                  style={{ padding:'4px 10px', fontSize:11 }}
+                >
+                  {opt}
+                </button>
               ))}
             </div>
           </div>
@@ -257,38 +512,87 @@ function AnalysisContent() {
         <div style={{ flex:1, display:'flex', flexDirection:'column', gap:14, minWidth:0, overflow:'hidden' }}>
           
           {/* Top Controls */}
-          <div className="stride-card" style={{ padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0 }}>
-            <div>
-              <div style={{ fontSize:16, fontWeight:700, color:'var(--text-primary)' }}>{sf?.name ?? 'No Flight Selected'}</div>
-              <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:2 }}>
-                {filtered.length} frames matched filter: <span style={{color:'var(--text-primary)', fontWeight:600}}>{filter}</span>
-              </div>
-            </div>
-            
-            <div style={{ display:'flex', gap:16, alignItems:'center' }}>
-              {/* View Toggle */}
-              <div style={{ display:'flex', background:'var(--bg-secondary)', padding:4, borderRadius:'var(--radius-md)', border:'1px solid var(--border-primary)' }}>
-                <button onClick={()=>setViewMode('grid')} className={`btn btn-sm ${viewMode==='grid'?'btn-primary':'btn-ghost'}`} style={{ padding:'4px 10px', height:28 }}><ImageIcon size={14}/></button>
-                <button onClick={()=>setViewMode('map')} className={`btn btn-sm ${viewMode==='map'?'btn-primary':'btn-ghost'}`} style={{ padding:'4px 10px', height:28 }}><MapIcon size={14}/></button>
+          {inputSource === 'file' && (
+            <div className="stride-card" style={{ padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0 }}>
+              <div>
+                <div style={{ fontSize:16, fontWeight:700, color:'var(--text-primary)' }}>{sf?.name ?? 'No Flight Selected'}</div>
+                <div style={{ fontSize:12, color:'var(--text-secondary)', marginTop:2 }}>
+                  {filtered.length} frames matched filter
+                </div>
               </div>
               
-              {/* Compare Toggle */}
-              <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:13, color:'var(--text-secondary)' }}>
-                <input type="checkbox" checked={isCompare} onChange={e=>setIsCompare(e.target.checked)} />
-                Compare Mode
-              </label>
-              {isCompare && (
-                <select value={compareId} onChange={e=>setCompareId(e.target.value)} className="stride-select" style={{ width:'auto', padding:'4px 8px', height:32 }}>
-                  {flights.filter(f=>f.id!==selectedFlightId).map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
-                </select>
-              )}
-              <button className="btn btn-secondary btn-sm" title="Fullscreen"><Maximize size={14}/></button>
+              <div style={{ display:'flex', gap:16, alignItems:'center' }}>
+                {/* View Toggle */}
+                <div style={{ display:'flex', background:'var(--bg-secondary)', padding:4, borderRadius:'var(--radius-md)', border:'1px solid var(--border-primary)' }}>
+                  <button onClick={()=>{setViewMode('grid');setIsCompare(false);}} className={`btn btn-sm ${viewMode==='grid'&&!isCompare?'btn-primary':'btn-ghost'}`} style={{ padding:'4px 10px', height:28 }}><ImageIcon size={14}/></button>
+                  <button onClick={()=>{setViewMode('map');setIsCompare(false);}} className={`btn btn-sm ${viewMode==='map'?'btn-primary':'btn-ghost'}`} style={{ padding:'4px 10px', height:28 }}><MapIcon size={14}/></button>
+                </div>
+                
+                {/* Compare Toggle */}
+                <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:13, color:'var(--text-secondary)' }}>
+                  <input type="checkbox" checked={isCompare} onChange={e=>{setIsCompare(e.target.checked); if(e.target.checked) setViewMode('grid');}} />
+                  Compare Mode
+                </label>
+                {isCompare && (
+                  <select value={compareId} onChange={e=>setCompareId(e.target.value)} className="stride-select" style={{ width:'auto', padding:'4px 8px', height:32 }}>
+                    {flights.filter(f=>f.id!==selectedFlightId).map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+                  </select>
+                )}
+                <button className="btn btn-secondary btn-sm" title="Fullscreen"><Maximize size={14}/></button>
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Dynamic Main Content: Grid OR Map */}
-          <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:14 }}>
-            {viewMode === 'map' ? (
+          {/* Dynamic Main Content: Grid OR Map OR Live Feed */}
+          <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:14 }} id="frames-scroll-container">
+            {inputSource === 'live' ? (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ width: '100%', height: 400, background: '#000', borderRadius: 'var(--radius-lg)', position: 'relative', overflow: 'hidden', display: 'flex', justifyContent: 'center' }}>
+                  <video ref={videoRef} autoPlay playsInline muted style={{ height: '100%', objectFit: 'contain' }} />
+                  {isLiveCapturing && <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 10 }} className="badge badge-red"><span style={{animation:'pulse 2s infinite'}}>●</span> LIVE ANALYSIS</div>}
+                  {!isLiveCapturing && <div style={{ position:'absolute', top:'50%', color:'var(--text-muted)' }}>Camera inactive. Click 'Start Live Analysis'.</div>}
+                </div>
+                
+                {/* Live grid underneath */}
+                <div style={{ display:'grid', gridTemplateColumns: 'repeat(3,1fr)', gap:14, alignContent:'start' }}>
+                  {filtered.map(f=>{
+                    const isHighlighted = f.id === activeFrameId;
+                    return (
+                      <div key={f.id} className={`stride-card stride-card-glow ${isHighlighted ? 'highlight-frame' : ''}`} style={{ overflow:'hidden', border: isHighlighted ? '2px solid var(--accent-blue)' : undefined }} ref={isHighlighted ? (el) => el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) : null}>
+                        <div style={{ position:'relative', height:180 }}>
+                          <img src={f.url} alt="frame" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                          {f.bboxes?.map((b,i)=><div key={i} style={{ position:'absolute', top:`${b.y}%`, left:`${b.x}%`, width:`${b.w}%`, height:`${b.h}%`, border:'2px solid var(--accent-red)', pointerEvents:'none', borderRadius:2 }} />)}
+                          
+                          <div style={{ position:'absolute', top:8, right:8, display:'flex', gap:6, zIndex:10 }}>
+                            {f.flagged && <div className="badge badge-red"><Flag size={10}/> URGENT</div>}
+                            <div className="badge" style={{ background:statusBg(f.status), color:statusColor(f.status), border:`1px solid ${statusColor(f.status)}40` }}>{f.status}</div>
+                          </div>
+                        </div>
+                        
+                        <div style={{ padding:'12px 14px' }}>
+                          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                            <div>
+                              {f.type !== 'none' && <div style={{ fontSize:12, fontWeight:700, color:statusColor(f.status), textTransform:'uppercase', letterSpacing:'0.05em' }}>{f.type}</div>}
+                              <div style={{ fontSize:11, color:'var(--text-primary)', marginTop:2 }}><Crosshair size={10} style={{display:'inline', marginRight:4}}/>{f.metadata?.zone || 'N/A'}</div>
+                            </div>
+                            <div style={{ textAlign:'right' }}>
+                              <div style={{ fontSize:10, color:'var(--text-muted)' }}>{new Date(f.ts).toLocaleTimeString([],{hour12:false})}</div>
+                            </div>
+                          </div>
+                          
+                          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                            <div className="progress-track" style={{ flex:1 }}>
+                              <div className="progress-fill" style={{ width:`${f.conf}%`, background: f.conf>90?'var(--accent-green)':'var(--accent-amber)' }} />
+                            </div>
+                            <span style={{ fontSize:11, fontWeight:600, color:'var(--text-secondary)', width:35 }}>{f.conf}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : viewMode === 'map' && !isCompare ? (
               <div style={{ flex:1, position:'relative' }}>
                 <InteractivePathMap frames={flightFrames} selectedId={activeFrameId} onSelect={setActiveFrameId} />
                 {activeFrameId && (
@@ -309,7 +613,9 @@ function AnalysisContent() {
                           </div>
                           <div style={{ fontSize:11, color:'var(--text-muted)' }}>GPS: {f.lat.toFixed(6)}, {f.lon.toFixed(6)}</div>
                           <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:10 }}>Zone: {f.metadata.zone}</div>
-                          <button className="btn btn-primary" style={{ width:'100%', justifyContent:'center' }} onClick={()=>handleFlag(f.id)}>Flag for Review</button>
+                          <button className="btn btn-primary" style={{ width:'100%', justifyContent:'center' }} onClick={()=>handleFlag(f.id)}>
+                            {f.flagged ? 'Unflag' : 'Flag for Review'}
+                          </button>
                         </div>
                       );
                     })()}
@@ -317,26 +623,40 @@ function AnalysisContent() {
                 )}
               </div>
             ) : (
-              <div style={{ flex:1, display:'grid', gridTemplateColumns: isCompare?'repeat(2,1fr)':'repeat(3,1fr)', gap:14, alignContent:'start' }}>
-                {filtered.map(f=>(
-                  <div key={f.id} className="stride-card stride-card-glow" style={{ overflow:'hidden' }}>
+              <div style={{ flex:1, display:'grid', gridTemplateColumns: isCompare?'1fr':'repeat(3,1fr)', gap:14, alignContent:'start' }}>
+                {filtered.map(f=>{
+                  let pairedFrame = null;
+                  if (isCompare) {
+                    const compareFrames = allFrames.filter(cf => cf.flightId === compareId);
+                    // find closest frame by gps distance roughly
+                    pairedFrame = compareFrames.reduce((prev, curr) => {
+                      const distP = Math.pow(prev.lat - f.lat, 2) + Math.pow(prev.lon - f.lon, 2);
+                      const distC = Math.pow(curr.lat - f.lat, 2) + Math.pow(curr.lon - f.lon, 2);
+                      return distP < distC ? prev : curr;
+                    }, compareFrames[0]);
+                  }
+
+                  const isHighlighted = f.id === activeFrameId;
+                  
+                  return (
+                  <div key={f.id} className={`stride-card stride-card-glow ${isHighlighted ? 'highlight-frame' : ''}`} style={{ overflow:'hidden', border: isHighlighted ? '2px solid var(--accent-blue)' : undefined }} ref={isHighlighted ? (el) => el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) : null}>
                     <div style={{ position:'relative' }}>
-                      {isCompare ? (
-                        <div style={{ display:'flex', height:180 }}>
+                      {isCompare && pairedFrame ? (
+                        <div style={{ display:'flex', height:240 }}>
                           <div style={{ flex:1, position:'relative', borderRight:'2px dashed var(--border-active)' }}>
-                            <div className="glass badge" style={{ position:'absolute', top:8, left:8, zIndex:5 }}>Baseline</div>
-                            <img src={f.prevUrl} alt="prev" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                            <div className="glass badge" style={{ position:'absolute', top:8, left:8, zIndex:5 }}>{flights.find(x=>x.id===compareId)?.name || 'Compare Flight'}</div>
+                            <img src={pairedFrame.url} alt="compare" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
                           </div>
                           <div style={{ flex:1, position:'relative' }}>
-                            <div className="glass badge" style={{ position:'absolute', top:8, left:8, zIndex:5 }}>Current</div>
+                            <div className="glass badge" style={{ position:'absolute', top:8, left:8, zIndex:5 }}>Selected Flight</div>
                             <img src={f.url} alt="curr" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
-                            {f.bboxes.map((b,i)=><div key={i} style={{ position:'absolute', top:`${b.y}%`, left:`${b.x}%`, width:`${b.w}%`, height:`${b.h}%`, border:'2px solid var(--accent-red)', pointerEvents:'none', borderRadius:2 }} />)}
+                            {f.bboxes?.map((b,i)=><div key={i} style={{ position:'absolute', top:`${b.y}%`, left:`${b.x}%`, width:`${b.w}%`, height:`${b.h}%`, border:'2px solid var(--accent-red)', pointerEvents:'none', borderRadius:2 }} />)}
                           </div>
                         </div>
                       ) : (
                         <div style={{ position:'relative', height:180 }}>
                           <img src={f.url} alt="frame" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
-                          {f.bboxes.map((b,i)=><div key={i} style={{ position:'absolute', top:`${b.y}%`, left:`${b.x}%`, width:`${b.w}%`, height:`${b.h}%`, border:'2px solid var(--accent-red)', pointerEvents:'none', borderRadius:2 }} />)}
+                          {f.bboxes?.map((b,i)=><div key={i} style={{ position:'absolute', top:`${b.y}%`, left:`${b.x}%`, width:`${b.w}%`, height:`${b.h}%`, border:'2px solid var(--accent-red)', pointerEvents:'none', borderRadius:2 }} />)}
                         </div>
                       )}
                       
@@ -358,7 +678,7 @@ function AnalysisContent() {
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
                         <div>
                           {f.type !== 'none' && <div style={{ fontSize:12, fontWeight:700, color:statusColor(f.status), textTransform:'uppercase', letterSpacing:'0.05em' }}>{f.type}</div>}
-                          <div style={{ fontSize:11, color:'var(--text-primary)', marginTop:2 }}><Crosshair size={10} style={{display:'inline', marginRight:4}}/>{f.metadata.zone}</div>
+                          <div style={{ fontSize:11, color:'var(--text-primary)', marginTop:2 }}><Crosshair size={10} style={{display:'inline', marginRight:4}}/>{f.metadata?.zone || 'N/A'}</div>
                         </div>
                         <div style={{ textAlign:'right' }}>
                           <div style={{ fontSize:10, color:'var(--text-muted)' }}>{new Date(f.ts).toLocaleTimeString([],{hour12:false})}</div>
@@ -371,15 +691,14 @@ function AnalysisContent() {
                           <div className="progress-fill" style={{ width:`${f.conf}%`, background: f.conf>90?'var(--accent-green)':'var(--accent-amber)' }} />
                         </div>
                         <span style={{ fontSize:11, fontWeight:600, color:'var(--text-secondary)', width:35 }}>{f.conf}%</span>
-                        {!f.flagged && (
-                          <button className="btn btn-ghost btn-sm" style={{ padding:'4px 8px' }} onClick={()=>handleFlag(f.id)}>
-                            <Flag size={12}/>
-                          </button>
-                        )}
+                        
+                        <button className="btn btn-ghost btn-sm" style={{ padding:'4px 8px', background: f.flagged ? 'var(--accent-red-glow)' : 'transparent' }} onClick={()=>handleFlag(f.id)}>
+                          <Flag size={12} color={f.flagged ? 'var(--accent-red)' : 'var(--text-secondary)'} />
+                        </button>
                       </div>
                     </div>
                   </div>
-                ))}
+                )})}
               </div>
             )}
           </div>
@@ -392,7 +711,9 @@ function AnalysisContent() {
             </div>
             
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-              <button className="btn btn-ghost" style={{ padding:4 }}><Play size={14}/></button>
+              <button className={`btn ${isPlaying ? 'btn-primary' : 'btn-ghost'}`} style={{ padding:4 }} onClick={() => setIsPlaying(!isPlaying)}>
+                {isPlaying ? <Pause size={14}/> : <Play size={14}/>}
+              </button>
               
               <div style={{ flex:1, height:24, background:'var(--bg-secondary)', borderRadius:'var(--radius-sm)', border:'1px solid var(--border-primary)', position:'relative', display:'flex', alignItems:'center', padding:'0 4px', overflow:'hidden' }}>
                 {flightFrames.map((f, i) => {

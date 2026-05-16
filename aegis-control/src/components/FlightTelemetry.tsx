@@ -1,0 +1,146 @@
+'use client';
+
+import { Activity, Battery, Map as MapIcon, RotateCcw } from 'lucide-react';
+import { ArtificialHorizon, CompassWidget } from '@/components/FlightInstruments';
+import { SkeletonBlock } from '@/components/SkeletonBlock';
+
+export interface TelemetryFrame {
+  timestamp?: number;
+  altitude: number;
+  groundspeed: number;
+  airspeed: number;
+  heading: number;
+  roll: number;
+  pitch: number;
+  yaw: number;
+  battery_pct: number;
+  battery_voltage: number;
+  battery_current: number;
+  gps_sats: number;
+  gps_fix: string;
+  mode: string;
+  armed: boolean;
+  signal_strength: number;
+  imu_status: string;
+  phase: string;
+}
+
+export type TelemetryMode = 'idle' | 'demo' | 'live';
+
+interface FlightTelemetryProps {
+  mode: TelemetryMode;
+  telemetry: TelemetryFrame | null;
+  onCommand: (cmd: string) => void;
+}
+
+const statBoxStyle: React.CSSProperties = {
+  background: 'var(--bg-elevated)',
+  padding: '8px 12px',
+  borderRadius: 'var(--radius-sm)',
+  border: '1px solid var(--border-primary)',
+};
+
+function StatBox({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div style={statBoxStyle}>
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, color, fontFamily: 'var(--font-mono)', marginTop: 2 }}>{value}</div>
+    </div>
+  );
+}
+
+export default function FlightTelemetry({ mode, telemetry, onCommand }: FlightTelemetryProps) {
+  const showData = mode !== 'idle' && telemetry != null;
+  const controlsEnabled = mode === 'live' && telemetry != null;
+
+  const bat = telemetry?.battery_pct ?? 0;
+  const batColor = bat > 40 ? 'var(--accent-green)' : bat > 20 ? 'var(--accent-amber)' : 'var(--accent-red)';
+  const armed = telemetry?.armed ?? false;
+  const gpsColor = showData && (telemetry?.gps_sats ?? 0) > 8 ? 'var(--accent-green)' : 'var(--accent-amber)';
+  const disabledBtn: React.CSSProperties = !controlsEnabled ? { opacity: 0.45, cursor: 'not-allowed' } : {};
+
+  return (
+    <div className="stride-card" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%' }}>
+      <div className="card-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Activity size={13} color="var(--accent-blue)" />
+          <span className="card-header-title">Flight Telemetry</span>
+        </div>
+        {mode === 'live' ? (
+          <div className="badge" style={{ background: 'var(--accent-green-glow)', color: 'var(--accent-green)', borderColor: 'rgba(34,197,94,0.3)' }}>
+            <div className="status-dot status-online" />
+            LINK ACTIVE
+          </div>
+        ) : mode === 'demo' ? (
+          <div className="badge badge-amber" style={{ background: 'var(--accent-amber-glow)', color: 'var(--accent-amber)', borderColor: 'rgba(245,158,11,0.35)' }}>
+            <div className="status-dot status-warning" />
+            DEMO
+          </div>
+        ) : (
+          <div className="badge" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', borderColor: 'var(--border-primary)' }}>
+            <div className="status-dot status-offline" />
+            AWAITING MAVLINK
+          </div>
+        )}
+      </div>
+      <div style={{ padding: 14, flex: 1, display: 'flex', flexDirection: 'column', gap: 14, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center', paddingBottom: 14, borderBottom: '1px solid var(--border-primary)', opacity: mode === 'idle' ? 0.35 : 1, filter: mode === 'idle' ? 'grayscale(1)' : 'none', transition: 'opacity 0.2s, filter 0.2s' }}>
+          <div style={{ textAlign: 'center' }}>
+            <ArtificialHorizon roll={showData ? telemetry!.roll : 0} pitch={showData ? telemetry!.pitch : 0} size={90} disabled={mode === 'idle'} />
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6, fontWeight: 600 }}>ATTITUDE</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <CompassWidget heading={showData ? telemetry!.heading : 0} size={90} disabled={mode === 'idle'} />
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6, fontWeight: 600 }}>HEADING</div>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {showData ? (
+            <>
+              <StatBox label="Altitude" value={`${telemetry!.altitude.toFixed(1)} m`} color="var(--accent-blue)" />
+              <StatBox label="Speed" value={`${telemetry!.groundspeed.toFixed(1)} m/s`} color="var(--text-primary)" />
+              <StatBox label="GPS" value={`${telemetry!.gps_sats} Sats (${telemetry!.gps_fix})`} color={gpsColor} />
+              <StatBox label="Mode" value={telemetry!.mode} color="var(--text-primary)" />
+              <StatBox label="Signal" value={`${telemetry!.signal_strength}%`} color="var(--accent-green)" />
+              <StatBox label="IMU" value={telemetry!.imu_status} color="var(--accent-green)" />
+            </>
+          ) : (
+            ['Altitude', 'Speed', 'GPS', 'Mode', 'Signal', 'IMU'].map((label) => (
+              <div key={label} style={statBoxStyle}>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>{label}</div>
+                <SkeletonBlock height={14} width="70%" style={{ marginTop: 6 }} />
+              </div>
+            ))
+          )}
+        </div>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Battery size={12} color={showData ? batColor : 'var(--text-muted)'} />
+              <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>Battery</span>
+            </div>
+            {showData ? (
+              <>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{telemetry!.battery_voltage.toFixed(1)}V · {telemetry!.battery_current.toFixed(1)}A</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: batColor, fontFamily: 'var(--font-mono)' }}>{bat}%</span>
+              </>
+            ) : (
+              <SkeletonBlock height={14} width={48} />
+            )}
+          </div>
+          {showData ? (
+            <div className="progress-track"><div className="progress-fill" style={{ width: `${bat}%`, background: batColor }} /></div>
+          ) : (
+            <SkeletonBlock height={8} rounded />
+          )}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 'auto' }}>
+          <button type="button" className={`btn ${armed ? 'btn-danger' : 'btn-success'}`} onClick={() => controlsEnabled && onCommand(armed ? 'disarm' : 'arm')} disabled={!controlsEnabled} style={{ justifyContent: 'center', ...disabledBtn }}>{armed ? 'Disarm' : 'Arm Drone'}</button>
+          <button type="button" className="btn btn-primary" onClick={() => controlsEnabled && onCommand('takeoff')} disabled={!controlsEnabled || !armed || telemetry?.phase !== 'ground'} style={{ justifyContent: 'center', ...disabledBtn }}>Takeoff</button>
+          <button type="button" className="btn btn-secondary" onClick={() => controlsEnabled && onCommand('start_mission')} disabled={!controlsEnabled || !armed} style={{ justifyContent: 'center', ...disabledBtn }}><MapIcon size={12} /> Mission</button>
+          <button type="button" className="btn btn-secondary" onClick={() => controlsEnabled && onCommand('rth')} disabled={!controlsEnabled || !armed} style={{ justifyContent: 'center', ...disabledBtn }}><RotateCcw size={12} /> RTH</button>
+        </div>
+      </div>
+    </div>
+  );
+}

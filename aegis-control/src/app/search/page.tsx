@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import PageShell from '@/components/PageShell';
 import { ToastProvider, useToast } from '@/components/Toast';
 import { Layers, Activity, ShieldAlert, Cpu, Box, AlertTriangle, Hammer, XCircle } from 'lucide-react';
-import Viewer from './Viewer';
+import ThreeDAnalysis from '@/components/ThreeDAnalysis';
 
 function SearchContent() {
   const { success, error } = useToast();
@@ -182,11 +182,12 @@ function SearchContent() {
           {/* 3D Canvas Container */}
           <div style={{ flex:1, borderRadius:'var(--radius-lg)', overflow:'hidden', border:'1px solid var(--border-primary)', position:'relative' }}>
             {activeModel ? (
-              <Viewer 
+              <ThreeDAnalysis 
                 mode={viewMode} 
                 onSelectDefect={setActiveDefectId} 
                 activeDefectId={activeDefectId}
                 modelData={activeModel}
+                viewMode={viewMode}
               />
             ) : (
               <div style={{ display:'flex', justifyContent:'center', alignItems:'center', height:'100%', color:'var(--text-muted)' }}>

@@ -6,9 +6,10 @@ interface ArtificialHorizonProps {
   roll: number;   // degrees
   pitch: number;  // degrees
   size?: number;
+  disabled?: boolean;
 }
 
-export function ArtificialHorizon({ roll, pitch, size = 120 }: ArtificialHorizonProps) {
+export function ArtificialHorizon({ roll, pitch, size = 120, disabled = false }: ArtificialHorizonProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -24,6 +25,25 @@ export function ArtificialHorizon({ roll, pitch, size = 120 }: ArtificialHorizon
     const r = w / 2 - 4;
 
     ctx.clearRect(0, 0, w, h);
+
+    if (disabled) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#1f2937';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(107,114,128,0.4)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.5, cy);
+      ctx.lineTo(cx + r * 0.5, cy);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(107,114,128,0.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      return;
+    }
 
     // Clip to circle
     ctx.save();
@@ -115,7 +135,7 @@ export function ArtificialHorizon({ roll, pitch, size = 120 }: ArtificialHorizon
     ctx.strokeStyle = 'rgba(59,130,246,0.5)';
     ctx.lineWidth = 2;
     ctx.stroke();
-  }, [roll, pitch]);
+  }, [roll, pitch, disabled]);
 
   return (
     <canvas
@@ -130,9 +150,10 @@ export function ArtificialHorizon({ roll, pitch, size = 120 }: ArtificialHorizon
 interface CompassProps {
   heading: number;
   size?: number;
+  disabled?: boolean;
 }
 
-export function CompassWidget({ heading, size = 100 }: CompassProps) {
+export function CompassWidget({ heading, size = 100, disabled = false }: CompassProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -152,11 +173,20 @@ export function CompassWidget({ heading, size = 100 }: CompassProps) {
     // Background
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fillStyle = '#111827';
+    ctx.fillStyle = disabled ? '#1f2937' : '#111827';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(59,130,246,0.4)';
+    ctx.strokeStyle = disabled ? 'rgba(107,114,128,0.35)' : 'rgba(59,130,246,0.4)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
+
+    if (disabled) {
+      ctx.font = `bold ${Math.round(r * 0.2)}px "JetBrains Mono", monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(107,114,128,0.6)';
+      ctx.fillText('---', cx, cy);
+      return;
+    }
 
     // Rotate for heading
     ctx.save();
@@ -217,7 +247,7 @@ export function CompassWidget({ heading, size = 100 }: CompassProps) {
     ctx.fillStyle = '#F3F4F6';
     ctx.fillText(`${Math.round(heading).toString().padStart(3,'0')}°`, cx, cy);
 
-  }, [heading]);
+  }, [heading, disabled]);
 
   return (
     <canvas
